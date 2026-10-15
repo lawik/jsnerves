@@ -503,6 +503,7 @@ function start_vm(user, pwd)
 
     function start()
     {
+        console.log("[jsnerves] WASM module preRun: start() called");
         /* C functions called from javascript */
         console_write1 = Module.cwrap('console_queue_char', null, ['number']);
         fs_import_file = Module.cwrap('fs_import_file', null, ['string', 'number', 'number']);
@@ -517,7 +518,19 @@ function start_vm(user, pwd)
             net_state = new Ethernet(net_url);
         }
 
+        console.log("[jsnerves] Calling vm_start with url=" + url + " mem=" + mem_size);
+
+        /* Intercept terminal write to log all boot output */
+        var origWrite = term.write.bind(term);
+        term.write = function(str) {
+            if (str && str.length > 0 && str !== "\r\n") {
+                console.log("[jsnerves] term output (" + str.length + " chars): " + JSON.stringify(str.substring(0, 200)));
+            }
+            origWrite(str);
+        };
+
         Module.ccall("vm_start", null, ["string", "number", "string", "string", "number", "number", "number", "string"], [url, mem_size, cmdline, pwd, width, height, (net_state != null) | 0, drive_url]);
+        console.log("[jsnerves] vm_start returned");
         pwd = null;
     }
 
@@ -593,6 +606,7 @@ function start_vm(user, pwd)
     }
     Module.preRun = start;
 
+    console.log("[jsnerves] Loading WASM module: " + vm_url);
     loadScript(vm_url, null);
 }
 
