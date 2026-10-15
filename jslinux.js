@@ -115,6 +115,71 @@ function fit_terminal(el, base_size)
     }
 }
 
+/* Phones only show a keyboard when an editable element has focus, and
+   their IMEs mostly deliver text through "input" events (keydown arrives
+   as keyCode 229), which term.js does not listen for. Keep a hidden
+   textarea focused and turn changes to its value into terminal input.
+   On desktop term.js preventDefault()s the key events, so the textarea
+   never changes and nothing is sent twice. */
+function setup_soft_keyboard(term, ta)
+{
+    var prev = "";
+
+    function send(str)
+    {
+        if (term.utf8)
+            str = term.to_utf8(str);
+        term.show_cursor();
+        term.handler(str);
+    }
+
+    function focus()
+    {
+        if (document.activeElement !== ta)
+            ta.focus({ preventScroll: true });
+    }
+
+    ta.addEventListener("input", function() {
+        var cur = ta.value, i, n, nl;
+        /* Enter: send what is on the line, then CR, and start over */
+        nl = cur.indexOf("\n");
+        if (nl >= 0) {
+            cur = cur.replace(/\n/g, "");
+            ta.value = "";
+        }
+        n = Math.min(prev.length, cur.length);
+        for(i = 0; i < n && prev.charCodeAt(i) == cur.charCodeAt(i); i++)
+            ;
+        if (prev.length > i)
+            send("\x7f".repeat(prev.length - i));
+        if (cur.length > i)
+            send(cur.substring(i));
+        if (nl >= 0) {
+            send("\r");
+            prev = "";
+            ta.value = "";
+        } else {
+            prev = cur;
+        }
+    });
+
+    /* Don't let the buffer grow forever: forget the line on space/word
+       boundaries once it's safely out of IME composition range. */
+    ta.addEventListener("compositionend", function() {
+        if (ta.value.length > 64) {
+            ta.value = "";
+            prev = "";
+        }
+    });
+
+    /* the page is nothing but the console, so any tap or click means
+       "type here" */
+    document.addEventListener("click", focus);
+    document.addEventListener("touchend", focus, { passive: true });
+    window.addEventListener("pageshow", focus);
+    focus();
+}
+
 function get_params()
 {
     var url, query_str, p, tab, i, params, tab2;
@@ -595,7 +660,8 @@ function start_vm(user, pwd)
         /* start the terminal */
         term = new Term(cols, rows, term_handler, 10000);
         term.open(document.getElementById("term_container"),
-                  document.getElementById("term_paste"));
+                  document.getElementById("term_input"));
+        setup_soft_keyboard(term, document.getElementById("term_input"));
         term.term_el.style.fontSize = font_size + "px";
         fit_terminal(term.term_el, font_size);
         window.addEventListener("resize", function() {

@@ -1218,6 +1218,8 @@ Term.prototype.pasteHandler = function (ev)
         if (this.utf8)
             str = this.to_utf8(str);
         this.queue_chars(str);
+        if (ev.preventDefault)
+            ev.preventDefault();
         setTimeout(this.textAreaReset.bind(this), 10);
         return false;
     }
@@ -1226,7 +1228,8 @@ Term.prototype.pasteHandler = function (ev)
 Term.prototype.textAreaReset = function(ev)
 {
     /* reset text */
-    this.textarea_el.value = "Paste Here";
+    if (this.textarea_el)
+        this.textarea_el.value = "";
 }
 
 /* output queue to send back asynchronous responses */
