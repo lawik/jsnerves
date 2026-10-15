@@ -1,8 +1,79 @@
-.term {
-    font-family: courier,fixed,swiss,monospace,sans-serif;
-    font-size: 15px;
-    color: #f0f0f0;
+html, body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
     background: #000000;
+    color: #e6e6e6;
+}
+
+body {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    box-sizing: border-box;
+}
+
+#term_wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+
+.term {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+    font-size: 17px;
+    color: #e6e6e6;
+    background: #000000;
+}
+
+/* indeterminate download indicator, toggled via style.visibility in jslinux.js */
+.loader {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.loader_track {
+    position: relative;
+    width: 100%;
+    max-width: 480px;
+    height: 3px;
+    border-radius: 2px;
+    background: #1a1a1a;
+    overflow: hidden;
+}
+
+.loader_bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 40%;
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, rgba(0,255,0,0) 0%, #00ff00 50%, rgba(0,255,0,0) 100%);
+    animation: loader_sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes loader_sweep {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(350%); }
+}
+
+.loader_label {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #6a6a6a;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .loader_bar { animation: none; width: 100%; opacity: 0.6; }
 }
 
 .term_content a {

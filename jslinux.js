@@ -89,6 +89,32 @@ function update_downloading(flag)
     }
 }
 
+/* Shrink the terminal font so the whole console (and whatever is stacked
+   around it in #term_wrap) stays inside the viewport. The terminal is sized
+   in em/ch units, so scaling the font scales the box. */
+function fit_terminal(el, base_size)
+{
+    var wrap = el.parentElement.parentElement || el.parentElement;
+    var cs = getComputedStyle(document.body);
+    var pad_x = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+    var pad_y = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    var avail_w = document.documentElement.clientWidth - pad_x;
+    var avail_h = window.innerHeight - pad_y;
+    var size = base_size, i, r, wr, extra_h, scale;
+
+    el.style.fontSize = size + "px";
+    for(i = 0; i < 3; i++) {
+        r = el.getBoundingClientRect();
+        wr = wrap.getBoundingClientRect();
+        extra_h = Math.max(0, wr.height - r.height); /* loader, gaps */
+        scale = Math.min(1, avail_w / r.width, (avail_h - extra_h) / r.height);
+        if (scale >= 0.995)
+            break;
+        size = Math.max(1, Math.floor(size * scale * 10) / 10);
+        el.style.fontSize = size + "px";
+    }
+}
+
 function get_params()
 {
     var url, query_str, p, tab, i, params, tab2;
@@ -545,7 +571,7 @@ function start_vm(user, pwd)
     cmdline = params["cmdline"] || "";
     cols = (params["cols"] | 0) || 80;
     rows = (params["rows"] | 0) || 30;
-    font_size = (params["font_size"] | 0) || 15;
+    font_size = (params["font_size"] | 0) || 17;
     guest_url = params["guest_url"] || "";
     width = (params["w"] | 0) || 1024;
     height = (params["h"] | 0) || 640;
@@ -571,6 +597,10 @@ function start_vm(user, pwd)
         term.open(document.getElementById("term_container"),
                   document.getElementById("term_paste"));
         term.term_el.style.fontSize = font_size + "px";
+        fit_terminal(term.term_el, font_size);
+        window.addEventListener("resize", function() {
+            fit_terminal(term.term_el, font_size);
+        });
         term.write("Loading...\r\n");
     }
 
