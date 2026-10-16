@@ -629,7 +629,7 @@ function start_vm(user, pwd)
 
     params = get_params();
     cpu = params["cpu"] || "riscv64";
-    url = params["url"] || "root-riscv64.cfg";
+    url = params["url"] || "nerves.cfg";
     
     url = get_absolute_url(url);
     mem_size = (params["mem"] | 0) || 128; /* in mb */
