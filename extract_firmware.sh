@@ -82,11 +82,15 @@ done
 rm -f "$ZERO_BLOCK"
 
 # Create the block descriptor
-# NOTE: TinyEMU block_size is in KB
+# NOTE: TinyEMU block_size is in KB. The id identifies this disk image:
+# the browser keeps the guest's writes in IndexedDB under it, so a new
+# image starts clean instead of inheriting stale blocks.
+DISK_ID=$(sha256sum disk.img | cut -c1-16)
 cat > disk/blk.txt << EOT
 {
   block_size: ${BLOCK_SIZE},
   n_block: ${N_BLOCKS},
+  id: "${DISK_ID}",
 }
 EOT
 

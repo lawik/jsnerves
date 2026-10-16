@@ -73,6 +73,25 @@ body {
     color: #6a6a6a;
 }
 
+/* persistence state, filled in by update_disk_persist() in jslinux.js */
+.disk_status {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: #6a6a6a;
+    min-height: 1.2em;
+    text-align: center;
+}
+
+.disk_status a {
+    color: #8a8a8a;
+    text-decoration: underline;
+}
+
+.disk_status a:hover {
+    color: #e6e6e6;
+}
+
 @media (prefers-reduced-motion: reduce) {
     .loader_bar { animation: none; width: 100%; opacity: 0.6; }
 }

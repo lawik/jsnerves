@@ -89,6 +89,61 @@ function update_downloading(flag)
     }
 }
 
+/* Called by the emulator (lib.js) when the state of disk persistence
+   changes. Writes to the disk are kept in IndexedDB and restored on the
+   next visit; the reset link throws them away. */
+function format_kb(n)
+{
+    if (n >= 1048576)
+        return (n / 1048576).toFixed(1) + " MB";
+    return Math.round(n / 1024) + " KB";
+}
+
+function update_disk_persist(info)
+{
+    var el = document.getElementById("disk_status");
+    var reset_url, text;
+    if (!el)
+        return;
+    reset_url = window.location.pathname + "?reset=1";
+    switch (info.status) {
+    case "on":
+        text = "disk changes stay in this browser";
+        if (info.saved_bytes > 0)
+            text += " (" + format_kb(info.saved_bytes) + ")";
+        el.innerHTML = text + ' &middot; <a href="' + reset_url + '">reset disk</a>';
+        break;
+    case "error":
+        el.innerHTML = 'could not save disk changes &middot; <a href="' + reset_url + '">reset disk</a>';
+        break;
+    default:
+        el.textContent = "disk changes are lost when the page closes";
+        break;
+    }
+}
+
+/* ?reset=1: drop the persisted disk, then load the page again without
+   the parameter so a refresh does not reset twice */
+function reset_disk_then(f)
+{
+    var req;
+    if (typeof indexedDB == "undefined") {
+        f();
+        return;
+    }
+    try {
+        req = indexedDB.deleteDatabase("tinyemu-disk");
+    } catch (e) {
+        f();
+        return;
+    }
+    req.onsuccess = req.onerror = req.onblocked = function() {
+        if (window.history && history.replaceState)
+            history.replaceState(null, "", window.location.pathname);
+        f();
+    };
+}
+
 /* Shrink the terminal font so the whole console (and whatever is stacked
    around it in #term_wrap) stays inside the viewport. The terminal is sized
    in em/ch units, so scaling the font scales the box. */
@@ -741,6 +796,10 @@ function on_login()
     } else {
         var term_wrap_el = document.getElementById("term_wrap");
         term_wrap_el.style.display = "block";
-        start_vm(null, null);
+        if (params["reset"] | 0) {
+            reset_disk_then(function() { start_vm(null, null); });
+        } else {
+            start_vm(null, null);
+        }
     }
 })();
