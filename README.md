@@ -62,7 +62,8 @@ OpenSBI and U-Boot from the system's `images/` directory.
 
 Query parameters on `index.html`: `url=` another `.cfg`, `cols=`/`rows=`
 terminal size (default 80x30), `font_size=` (default 17px, shrunk to fit the
-viewport), `mem=` RAM in MB, `reset=1` to discard the persisted disk.
+viewport), `mem=` RAM in MB, `reset=1` to discard the persisted disk,
+`debug=1` to log everything written to the terminal to the browser console.
 
 ## Rebuilding the emulator
 

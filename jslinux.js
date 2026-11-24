@@ -122,6 +122,15 @@ function update_disk_persist(info)
     }
 }
 
+/* Called by the emulator when the guest powers the machine off (a reboot
+   resets the machine in place and never gets here) */
+function vm_power_off(status)
+{
+    if (term) {
+        term.write("\r\n\x1b[1m[ The machine is off. Reload the page to boot it again. ]\x1b[0m\r\n");
+    }
+}
+
 /* ?reset=1: drop the persisted disk, then load the page again without
    the parameter so a refresh does not reset twice */
 function reset_disk_then(f)
@@ -625,7 +634,7 @@ function start_vm(user, pwd)
 {
     var url, mem_size, cpu, params, vm_url, cmdline, cols, rows, guest_url;
     var font_size, graphic_enable, width, height, net_url, alloc_size;
-    var drive_url, vm_file;
+    var drive_url, vm_file, debug;
     
     function loadScript(src, f) {
         var head = document.getElementsByTagName("head")[0];
@@ -666,14 +675,16 @@ function start_vm(user, pwd)
 
         console.log("[jsnerves] Calling vm_start with url=" + url + " mem=" + mem_size);
 
-        /* Intercept terminal write to log all boot output */
-        var origWrite = term.write.bind(term);
-        term.write = function(str) {
-            if (str && str.length > 0 && str !== "\r\n") {
-                console.log("[jsnerves] term output (" + str.length + " chars): " + JSON.stringify(str.substring(0, 200)));
-            }
-            origWrite(str);
-        };
+        /* ?debug=1: also log everything written to the terminal */
+        if (debug && term) {
+            var origWrite = term.write.bind(term);
+            term.write = function(str) {
+                if (str && str.length > 0 && str !== "\r\n") {
+                    console.log("[jsnerves] term output (" + str.length + " chars): " + JSON.stringify(str.substring(0, 200)));
+                }
+                origWrite(str);
+            };
+        }
 
         Module.ccall("vm_start", null, ["string", "number", "string", "string", "number", "number", "number", "string"], [url, mem_size, cmdline, pwd, width, height, (net_state != null) | 0, drive_url]);
         console.log("[jsnerves] vm_start returned");
@@ -700,6 +711,7 @@ function start_vm(user, pwd)
     if (typeof net_url == "undefined")
         net_url = "wss://relay.widgetry.org/";
     drive_url = params["drive_url"] || "";
+    debug = params["debug"] | 0;
 
     if (user) {
         cmdline += " LOGIN_USER=" + user;
