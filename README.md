@@ -16,7 +16,7 @@ Everything here is static files. Serve the directory and open `index.html`.
 | `nerves.cfg` | VM description: 128 MB RAM, `opensbi.bin` as bios, `u-boot.bin` as kernel, `disk/` as the virtio disk |
 | `opensbi.bin` | OpenSBI `fw_jump` from the Nerves system |
 | `u-boot.bin` | U-Boot (S-mode, HTIF console, virtio-blk) from the Nerves system |
-| `disk/blk*.bin`, `disk/blk.txt` | the fwup-written disk image in 256 KB blocks, fetched on demand. Blocks that are all zeros are not present; the emulator treats a 404 as zeros. `blk.txt` also carries an `id` for the persisted writes |
+| `disk/blk*.bin`, `disk/blk.txt` | the fwup-written disk image in 256 KB blocks, fetched on demand. Blocks that are all zeros are not present: `blk.txt` lists them in `zero` as `[first, count]` ranges so they are never requested (a 404 also reads as zeros). `blk.txt` also carries an `id` for the persisted writes |
 
 The disk image holds an MBR, the U-Boot environment with the Nerves
 firmware metadata, kernel slots A and B, rootfs partitions A and B and an
@@ -55,8 +55,8 @@ python3 -m http.server 8000
 ```
 
 `extract_firmware.sh` writes the disk image with `fwup -a -t complete`, splits
-it into blocks, drops the empty ones, and copies OpenSBI and U-Boot from the
-system's `images/` directory.
+it into blocks, drops the empty ones (and lists them in `blk.txt`), and copies
+OpenSBI and U-Boot from the system's `images/` directory.
 
 ## Page parameters
 

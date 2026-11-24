@@ -67,19 +67,30 @@ split -b "${BLOCK_BYTES}" -d -a 9 --additional-suffix=.bin disk.img disk/blk
 LAST_BLOCK=$(ls disk/blk*.bin | sort | tail -1)
 truncate -s "${BLOCK_BYTES}" "${LAST_BLOCK}"
 
-# Blocks that are entirely zero are not served: the loader treats a missing
-# block as zeros. Most of the kernel slots and the empty B/application
-# partitions fall in this category.
+# Blocks that are entirely zero are not served. blk.txt lists them as
+# [first, count] ranges so the emulator never asks for them (an older
+# emulator, or a missing block, falls back to treating a 404 as zeros).
+# Most of the kernel slots and the empty B/application partitions fall in
+# this category.
 ZERO_BLOCK=$(mktemp)
+ZERO_LIST=$(mktemp)
 truncate -s "${BLOCK_BYTES}" "$ZERO_BLOCK"
 N_ZERO=0
 for blk in disk/blk*.bin; do
     if cmp -s "$blk" "$ZERO_BLOCK"; then
         rm -f "$blk"
         N_ZERO=$((N_ZERO + 1))
+        basename "$blk" .bin | sed 's/^blk0*//; s/^$/0/' >> "$ZERO_LIST"
     fi
 done
-rm -f "$ZERO_BLOCK"
+ZERO_RANGES=$(awk '
+    { n = $1 + 0
+      if (have && n == prev + 1) { count++ }
+      else { if (have) { out = out sep "[" first ", " count "]"; sep = ", " }
+             first = n; count = 1; have = 1 }
+      prev = n }
+    END { if (have) out = out sep "[" first ", " count "]"; print out }' "$ZERO_LIST")
+rm -f "$ZERO_BLOCK" "$ZERO_LIST"
 
 # Create the block descriptor
 # NOTE: TinyEMU block_size is in KB. The id identifies this disk image:
@@ -91,6 +102,7 @@ cat > disk/blk.txt << EOT
   block_size: ${BLOCK_SIZE},
   n_block: ${N_BLOCKS},
   id: "${DISK_ID}",
+  zero: [${ZERO_RANGES}],
 }
 EOT
 
