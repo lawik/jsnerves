@@ -44,6 +44,16 @@ Saved clusters are keyed by the `id` in `disk/blk.txt`, which
 firmware starts visitors from a clean disk instead of mixing old blocks with
 new ones.
 
+## Reboot and power off
+
+A reboot from the guest (`Nerves.Runtime.reboot()`, or `reset` in U-Boot)
+resets the emulated machine in place: OpenSBI, U-Boot and Linux start
+again on the same page with the disk as the guest left it, so U-Boot boots
+whichever slot the environment now selects. A firmware upgrade written
+with `fwup -t upgrade` therefore boots on the next reboot, and reverts on
+the one after if it is not validated. A power off stops the machine and
+says so in the console; reloading the page boots it again.
+
 ## Updating the firmware
 
 Build the firmware in `../web-demo-nerves`, then:
