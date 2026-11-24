@@ -30,7 +30,7 @@ body {
     background: #000000;
 }
 
-/* indeterminate download indicator, toggled via style.visibility in jslinux.js */
+/* disk image download, filled in from NervesVM "progress" events */
 .loader {
     width: 100%;
     display: flex;
@@ -53,28 +53,21 @@ body {
     position: absolute;
     top: 0;
     left: 0;
-    width: 40%;
+    width: 0;
     height: 100%;
     border-radius: 2px;
-    background: linear-gradient(90deg, rgba(0,255,0,0) 0%, #00ff00 50%, rgba(0,255,0,0) 100%);
-    animation: loader_sweep 1.4s ease-in-out infinite;
-}
-
-@keyframes loader_sweep {
-    0%   { transform: translateX(-100%); }
-    100% { transform: translateX(350%); }
+    background: #00aa00;
 }
 
 .loader_label {
     font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
     font-size: 12px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    letter-spacing: 0.04em;
     color: #6a6a6a;
 }
 
-/* persistence state, filled in by update_disk_persist() in jslinux.js */
-.disk_status {
+/* boot stage and disk persistence, from NervesVM "stage" and "disk" events */
+.status {
     font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
     font-size: 12px;
     letter-spacing: 0.04em;
@@ -83,17 +76,68 @@ body {
     text-align: center;
 }
 
-.disk_status a {
+.status a {
     color: #8a8a8a;
     text-decoration: underline;
 }
 
-.disk_status a:hover {
+.status a:hover {
     color: #e6e6e6;
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .loader_bar { animation: none; width: 100%; opacity: 0.6; }
+.term_content a {
+    color: #ffff00;
+}
+
+.term_cursor {
+    color: #000000;
+    background: #00ff00;
+}
+
+.term_scrollbar { background: transparent url(images/bg-scrollbar-track-y.png) no-repeat 0 0; position: relative; background-position: 0 0; float: right; width: 15px; height: 100%; }
+.term_track { background: transparent url(images/bg-scrollbar-trackend-y.png) no-repeat 0 100%; height: 100%; width:13px; position: relative; padding: 0 1px; }
+.term_thumb { background: transparent url(images/bg-scrollbar-thumb-y.png) no-repeat 50% 100%; height: 20px; width: 25px; cursor: pointer; overflow: hidden; position: absolute; top: 0; left: -5px; }
+.term_thumb .term_end { background: transparent url(images/bg-scrollbar-thumb-y.png) no-repeat 50% 0; overflow: hidden; height: 5px; width: 25px; }
+.noSelect { user-select: none; -o-user-select: none; -moz-user-select: none; -khtml-user-select: none; -webkit-user-select: none; }
+#term_input {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    border: 0;
+    margin: 0;
+    opacity: 0;
+    font-size: 16px;
+    resize: none;
+    overflow: hidden;
+}
+
+label {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: #6a6a6a;
+}
+
+/* boot stage and disk persistence, from NervesVM "stage" and "disk" events */
+.status {
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: #6a6a6a;
+    min-height: 1.2em;
+    text-align: center;
+}
+
+.status a {
+    color: #8a8a8a;
+    text-decoration: underline;
+}
+
+.status a:hover {
+    color: #e6e6e6;
 }
 
 .term_content a {
@@ -135,8 +179,3 @@ body {
     bordex: 0px;
 }
 
-label {
-    cursor: pointer;
-    margin-left: 5px;
-    margin-right: 5px;
-}

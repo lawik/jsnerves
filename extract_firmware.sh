@@ -76,11 +76,15 @@ ZERO_BLOCK=$(mktemp)
 ZERO_LIST=$(mktemp)
 truncate -s "${BLOCK_BYTES}" "$ZERO_BLOCK"
 N_ZERO=0
+PRESENT=""
 for blk in disk/blk*.bin; do
+    n=$(basename "$blk" .bin | sed 's/^blk0*//; s/^$/0/')
     if cmp -s "$blk" "$ZERO_BLOCK"; then
         rm -f "$blk"
         N_ZERO=$((N_ZERO + 1))
-        basename "$blk" .bin | sed 's/^blk0*//; s/^$/0/' >> "$ZERO_LIST"
+        echo "$n" >> "$ZERO_LIST"
+    else
+        PRESENT="${PRESENT:+$PRESENT, }$n"
     fi
 done
 ZERO_RANGES=$(awk '
@@ -95,7 +99,10 @@ rm -f "$ZERO_BLOCK" "$ZERO_LIST"
 # Create the block descriptor
 # NOTE: TinyEMU block_size is in KB. The id identifies this disk image:
 # the browser keeps the guest's writes in IndexedDB under it, so a new
-# image starts clean instead of inheriting stale blocks.
+# image starts clean instead of inheriting stale blocks. prefetch lists
+# every block that is served: the emulator downloads them in the
+# background (prefetch_parallel at a time) while the guest boots, so the
+# whole image arrives once and the page can show the download's progress.
 DISK_ID=$(sha256sum disk.img | cut -c1-16)
 cat > disk/blk.txt << EOT
 {
@@ -103,6 +110,8 @@ cat > disk/blk.txt << EOT
   n_block: ${N_BLOCKS},
   id: "${DISK_ID}",
   zero: [${ZERO_RANGES}],
+  prefetch: [${PRESENT}],
+  prefetch_parallel: 4,
 }
 EOT
 

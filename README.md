@@ -11,18 +11,67 @@ Everything here is static files. Serve the directory and open `index.html`.
 
 | File | Role |
 | ---- | ---- |
-| `index.html`, `style.css`, `term.js`, `jslinux.js` | the page and terminal |
+| `nerves-vm.js` | the JavaScript API: loads the emulator, boots the machine and reports what happens as events (see below) |
+| `index.html`, `style.css`, `term.js`, `page.js` | the page: a terminal and status lines driven by those events |
 | `riscvemu64-wasm.js`, `riscvemu64-wasm.wasm` | the emulator (built from `../tinyemu`, branch `emscripten-modern`) |
 | `nerves.cfg` | VM description: 128 MB RAM, `opensbi.bin` as bios, `u-boot.bin` as kernel, `disk/` as the virtio disk |
 | `opensbi.bin` | OpenSBI `fw_jump` from the Nerves system |
 | `u-boot.bin` | U-Boot (S-mode, HTIF console, virtio-blk) from the Nerves system |
-| `disk/blk*.bin`, `disk/blk.txt` | the fwup-written disk image in 256 KB blocks, fetched on demand. Blocks that are all zeros are not present: `blk.txt` lists them in `zero` as `[first, count]` ranges so they are never requested (a 404 also reads as zeros). `blk.txt` also carries an `id` for the persisted writes |
+| `disk/blk*.bin`, `disk/blk.txt` | the fwup-written disk image in 256 KB blocks. Blocks that are all zeros are not present: `blk.txt` lists them in `zero` as `[first, count]` ranges so they are never requested (a 404 also reads as zeros). The other blocks are listed in `prefetch`: the emulator downloads them in the background, `prefetch_parallel` (4) at a time, while the guest boots, and fetches any block the guest needs first right away. `blk.txt` also carries an `id` for the persisted writes |
 
 The disk image holds an MBR, the U-Boot environment with the Nerves
 firmware metadata, kernel slots A and B, rootfs partitions A and B and an
 f2fs application partition. U-Boot reads `nerves_fw_active` from the
 environment and boots that slot. See `fwup_include/fwup-common.conf` in
 `../nerves_system_jslinux` for the layout.
+
+## JavaScript API
+
+`nerves-vm.js` defines `NervesVM`, an `EventTarget`. The page subscribes to
+its events; nothing polls.
+
+```js
+const vm = new NervesVM({ config: "nerves.cfg", cols: 80, rows: 30 });
+vm.addEventListener("console", (e) => term.write(e.detail.data));
+vm.addEventListener("progress", (e) => {
+  const p = e.detail; // loaded, total, percent, bytesPerSecond, secondsLeft, done
+  label.textContent = `${p.percent.toFixed(0)}% of ${p.total} bytes`;
+});
+vm.addEventListener("stage", (e) => console.log(e.detail.stage, e.detail.sinceBoot));
+await vm.start();
+vm.write("Nerves.Runtime.KV.get_all()\r");
+```
+
+Options: `config` (VM configuration file, default `nerves.cfg`),
+`emulator` (default `riscvemu64-wasm.js`), `memory` (MB, default 128),
+`cols`/`rows` (console size the guest sees), `cmdline`, `resetDisk` (drop
+the disk saved in this browser before booting), `logLines` (how many lines
+`vm.log` keeps, default 2000), `network` (an adapter, see `sendPacket` in
+the source).
+
+Events (the payload is in `event.detail`):
+
+| Event | Detail | When |
+| ----- | ------ | ---- |
+| `console` | `{data}` | console output as it arrives, escape sequences and all |
+| `line` | `{text, time}` | each complete console line without escape sequences; `time` is ms since `start()`. The last lines are in `vm.log` |
+| `stage` | `{stage, label, previous, time, sinceBoot, slot}` | boot progress: `loading` (the emulator), `opensbi`, `uboot`, `linux`, `init` (erlinit), `erlang`, `ready` (the IEx prompt); `reset` when the guest reboots and `off` when it powers off. `slot` is the firmware slot U-Boot booted. Recognized from the console output |
+| `progress` | `{loaded, total, percent, bytesPerSecond, secondsLeft, blocksLoaded, blocksTotal, elapsed, done}` | download of the disk image (every block in `blk.txt` that is not all zeros), at most every 100 ms and once more when done. The speed is over the last 3 seconds |
+| `disk` | `{status, savedBytes, restoredBytes}` | disk persistence: `on`, `off` or `error` |
+| `reset` | `{}` | the guest rebooted the machine |
+| `poweroff` | `{status}` | the guest powered the machine off |
+| `error` | `{message}` | the emulator or a block could not be loaded |
+
+`vm.stage`, `vm.slot`, `vm.progress`, `vm.disk` and `vm.log` hold the
+latest values. `vm.write(str)` types into the console. `NervesVM.resetDisk()`
+deletes the saved disk. The emulator keeps its state in globals, so a page
+can run one `NervesVM`; `page.js` sets `window.nervesVM` for the browser
+console.
+
+The emulator side of this is in `../tinyemu/js/lib.js`: every call it makes
+into the page goes through an optional callback on `Module` (`onConsoleOutput`,
+`onFetch`, `onDiskInfo`, `onDiskPersist`, `onReset`, `onPowerOff`,
+`onNetPacket`), which `nerves-vm.js` sets.
 
 ## Persistence
 
@@ -65,15 +114,16 @@ python3 -m http.server 8000
 ```
 
 `extract_firmware.sh` writes the disk image with `fwup -a -t complete`, splits
-it into blocks, drops the empty ones (and lists them in `blk.txt`), and copies
-OpenSBI and U-Boot from the system's `images/` directory.
+it into blocks, drops the empty ones (and lists them in `blk.txt`), lists the
+others for prefetching, and copies OpenSBI and U-Boot from the system's
+`images/` directory.
 
 ## Page parameters
 
 Query parameters on `index.html`: `url=` another `.cfg`, `cols=`/`rows=`
 terminal size (default 80x30), `font_size=` (default 17px, shrunk to fit the
 viewport), `mem=` RAM in MB, `reset=1` to discard the persisted disk,
-`debug=1` to log everything written to the terminal to the browser console.
+`debug=1` to log the console lines and boot stages to the browser console.
 
 ## Rebuilding the emulator
 
