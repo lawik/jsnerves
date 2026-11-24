@@ -149,6 +149,26 @@ function setup_soft_keyboard(term, ta)
     focus();
 }
 
+/* ?wisp=ws://host:port/ gives the guest a network through a Wisp server,
+   ?ethernet=ws://host:port/ through an Ethernet relay (net/nerves-net.js).
+   With wisp, ?expose=ws://host:port/ makes the guest's port 22 (or
+   ?expose_port=) reachable through a relay (see expose()). */
+function network(params)
+{
+    if (!params["wisp"] && !params["ethernet"])
+        return Promise.resolve(null);
+    return import("./net/nerves-net.js").then(function(net) {
+        var adapter;
+        if (!params["wisp"])
+            return net.ethernet(params["ethernet"]);
+        adapter = net.wisp(params["wisp"]);
+        /* ?expose=ws://relay/: the guest's SSH port through a relay */
+        if (params["expose"])
+            net.expose(adapter, params["expose"], (params["expose_port"] | 0) || 22);
+        return adapter;
+    });
+}
+
 (function() {
     var params = get_params();
     var cols = (params["cols"] | 0) || 80;
@@ -264,7 +284,11 @@ function setup_soft_keyboard(term, ta)
     }
 
     term.write("Loading...\r\n");
-    vm.start().then(function() {
+    network(params).then(function(net) {
+        vm.options.network = net;
+        window.nervesNet = net;
+        return vm.start();
+    }).then(function() {
         /* a ?reset=1 reload would reset the disk again */
         if ((params["reset"] | 0) && window.history && history.replaceState)
             history.replaceState(null, "", window.location.pathname);

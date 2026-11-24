@@ -87,6 +87,8 @@ class NervesVM extends EventTarget {
         this._bootT0 = 0;
         this._image = null;
         this._queueChar = null;
+        this._netWrite = null;
+        this._netCarrier = null;
         this._network = null;
     }
 
@@ -159,20 +161,20 @@ class NervesVM extends EventTarget {
         });
     }
 
-    /* A network adapter is an object with receive(frame): it gets every
-       Ethernet frame the guest sends, and gives frames to the guest with
-       vm.sendPacket(frame). Pass it as options.network so the guest sees a
-       network interface. */
+    /* A network adapter (see net/nerves-net.js) is an object with
+       receive(frame), which gets every Ethernet frame the guest sends, and
+       optionally attach(vm), called once the machine exists. It gives
+       frames to the guest with vm.sendPacket(frame) and sets the link state
+       with vm.setCarrier(up). Pass it as options.network so the guest sees
+       a network interface. */
     sendPacket(frame) {
-        const M = global.Module;
-        const buf = M._malloc(frame.length);
-        M.HEAPU8.set(frame, buf);
-        M._net_write_packet(buf, frame.length);
-        M._free(buf);
+        if (this._netWrite)
+            this._netWrite(frame, frame.length);
     }
 
     setCarrier(up) {
-        global.Module._net_set_carrier(up ? 1 : 0);
+        if (this._netCarrier)
+            this._netCarrier(up ? 1 : 0);
     }
 
     /* internals */
@@ -190,6 +192,8 @@ class NervesVM extends EventTarget {
         const url = new URL(this.options.config, document.baseURI).href;
         const net = this.options.network;
         this._queueChar = M.cwrap("console_queue_char", null, ["number"]);
+        this._netWrite = M.cwrap("net_write_packet", null, ["array", "number"]);
+        this._netCarrier = M.cwrap("net_set_carrier", null, ["number"]);
         M.ccall("vm_start", null,
                 ["string", "number", "string", "string", "number", "number", "number"],
                 [url, this.options.memory, this.options.cmdline, null, 0, 0, net ? 1 : 0]);

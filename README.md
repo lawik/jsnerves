@@ -13,6 +13,7 @@ Everything here is static files. Serve the directory and open `index.html`.
 | ---- | ---- |
 | `nerves-vm.js` | the JavaScript API: loads the emulator, boots the machine and reports what happens as events (see below) |
 | `index.html`, `style.css`, `term.js`, `page.js` | the page: a terminal and status lines driven by those events |
+| `net/nerves-net.js`, `net/v86/` | network adapters for the guest (see Networking); loaded only when a network is asked for |
 | `riscvemu64-wasm.js`, `riscvemu64-wasm.wasm` | the emulator (built from `../tinyemu`, branch `emscripten-modern`) |
 | `nerves.cfg` | VM description: 128 MB RAM, `opensbi.bin` as bios, `u-boot.bin` as kernel, `disk/` as the virtio disk |
 | `opensbi.bin` | OpenSBI `fw_jump` from the Nerves system |
@@ -73,6 +74,38 @@ into the page goes through an optional callback on `Module` (`onConsoleOutput`,
 `onFetch`, `onDiskInfo`, `onDiskPersist`, `onReset`, `onPowerOff`,
 `onNetPacket`), which `nerves-vm.js` sets.
 
+## Networking
+
+The machine has a virtio-net interface only when the page passes a network
+adapter (`network` option; `page.js` does it for `?wisp=` or `?ethernet=`).
+`net/nerves-net.js` has two:
+
+- `wisp(url)`: the network lives in the page. v86's network stack
+  (`net/v86/`, BSD licensed, copied unchanged) answers DHCP (the guest gets
+  192.168.86.100, the router is .1), DNS (forwarded as DNS over HTTPS),
+  NTP (from the browser's clock) and ping, and ends every TCP connection the
+  guest opens in the browser. The byte streams travel over one WebSocket to
+  a [Wisp](https://github.com/MercuryWorkshop/wisp-protocol) server
+  (e.g. `@mercuryworkshop/wisp-js`), which opens the real connections.
+  TLS stays end to end between the guest and the far end. Connections into
+  the guest: `adapter.connect(port)` from the page, or `expose()` to put a
+  guest port behind a relay so that `ssh` from anywhere reaches nerves_ssh.
+- `ethernet(url)`: raw Ethernet frames over a WebSocket to a relay that
+  bridges them to a real network (the JSLinux "wsproxy" protocol).
+
+The firmware has to bring eth0 up: the `networking` branch of
+`../web-demo-nerves` adds vintage_net (DHCP on eth0), nerves_time and
+nerves_ssh. Try it with a local Wisp server:
+
+```sh
+npm i @mercuryworkshop/wisp-js && npx wisp-js-server --port 6001   # or any Wisp server
+python3 -m http.server 8000
+# http://localhost:8000/index.html?wisp=ws://localhost:6001/
+```
+
+The emulator needed 256-entry virtqueues for this (TinyEMU had 16, which
+stalls Linux's virtio-net transmit queue).
+
 ## Persistence
 
 Everything the guest writes to the disk (the U-Boot environment, the
@@ -123,7 +156,8 @@ others for prefetching, and copies OpenSBI and U-Boot from the system's
 Query parameters on `index.html`: `url=` another `.cfg`, `cols=`/`rows=`
 terminal size (default 80x30), `font_size=` (default 17px, shrunk to fit the
 viewport), `mem=` RAM in MB, `reset=1` to discard the persisted disk,
-`debug=1` to log the console lines and boot stages to the browser console.
+`debug=1` to log the console lines and boot stages to the browser console,
+`wisp=`/`ethernet=`/`expose=` for networking (see above).
 
 ## Rebuilding the emulator
 
