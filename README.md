@@ -15,10 +15,10 @@ Everything here is static files. Serve the directory and open `index.html`.
 | `index.html`, `style.css`, `term.js`, `page.js` | the page: a terminal and status lines driven by those events |
 | `net/nerves-net.js`, `net/v86/` | network adapters for the guest (see Networking); loaded only when a network is asked for |
 | `riscvemu64-wasm.js`, `riscvemu64-wasm.wasm` | the emulator (built from `../tinyemu`, branch `emscripten-modern`) |
-| `nerves.cfg` | VM description: 128 MB RAM, `opensbi.bin` as bios, `u-boot.bin` as kernel, `disk/` as the virtio disk |
+| `nerves.cfg` | VM description: 128 MB RAM, `opensbi.bin` as bios, `u-boot.bin` as kernel, `disk/<id>/blk.txt` as the virtio disk |
 | `opensbi.bin` | OpenSBI `fw_jump` from the Nerves system |
 | `u-boot.bin` | U-Boot (S-mode, HTIF console, virtio-blk) from the Nerves system |
-| `disk/blk*.bin`, `disk/blk.txt` | the fwup-written disk image in 256 KB blocks. Blocks that are all zeros are not present: `blk.txt` lists them in `zero` as `[first, count]` ranges so they are never requested (a 404 also reads as zeros). The other blocks are listed in `prefetch`: the emulator downloads them in the background, `prefetch_parallel` (4) at a time, while the guest boots, and fetches any block the guest needs first right away. `blk.txt` also carries an `id` for the persisted writes |
+| `disk/<id>/blk*.bin`, `disk/<id>/blk.txt` | the fwup-written disk image in 256 KB blocks, in a directory named after a hash of the image. Blocks that are all zeros are not present: `blk.txt` lists them in `zero` as `[first, count]` ranges so they are never requested (a 404 also reads as zeros). The other blocks are listed in `prefetch`: the emulator downloads them in the background, `prefetch_parallel` (4) at a time, while the guest boots, and fetches any block the guest needs first right away. `blk.txt` also carries an `id` for the persisted writes |
 
 The disk image holds an MBR, the U-Boot environment with the Nerves
 firmware metadata, kernel slots A and B, rootfs partitions A and B and an
@@ -121,7 +121,7 @@ is a power cut as far as Nerves is concerned. The system therefore ships a
 pre-formatted application partition and mounts it `sync,dirsync`, so file
 writes and directory changes are durable as soon as they return.
 
-Saved clusters are keyed by the `id` in `disk/blk.txt`, which
+Saved clusters are keyed by the `id` in `blk.txt`, which
 `extract_firmware.sh` sets from a hash of the disk image, so publishing a new
 firmware starts visitors from a clean disk instead of mixing old blocks with
 new ones.
@@ -147,9 +147,25 @@ python3 -m http.server 8000
 ```
 
 `extract_firmware.sh` writes the disk image with `fwup -a -t complete`, splits
-it into blocks, drops the empty ones (and lists them in `blk.txt`), lists the
-others for prefetching, and copies OpenSBI and U-Boot from the system's
-`images/` directory.
+it into blocks in `disk/<id>/` (replacing `disk/`), drops the empty ones (and
+lists them in `blk.txt`), lists the others for prefetching, points `drive0` in
+`nerves.cfg` at the new `blk.txt`, and copies OpenSBI and U-Boot from the
+system's `images/` directory.
+
+## Hosting
+
+Everything is static files (about 26 MB), so any static host works: no
+server code, no special headers. Serving `.wasm` as `application/wasm` is
+the only nicety.
+
+Each disk image lives in `disk/<id>/`, named after a hash of the image, so a
+new firmware gets new URLs: those files can be cached forever (`Cache-Control:
+public, max-age=31536000, immutable`). `nerves.cfg` says which image to boot,
+so it, `index.html` and the scripts want a short cache time or revalidation.
+Otherwise a visitor's browser or a CDN could mix an old cached `blk.txt` or
+block with the new image. `extract_firmware.sh` removes the older image; a
+deploy that keeps the previous `disk/<id>/` online for a while also lets
+visitors with a cached `nerves.cfg` still boot it.
 
 ## Page parameters
 

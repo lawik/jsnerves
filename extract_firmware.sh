@@ -13,9 +13,13 @@
 #   opensbi.bin   - OpenSBI fw_jump (TinyEMU "bios")
 #   u-boot.bin    - U-Boot, S-mode (TinyEMU "kernel"; it boots the real kernel
 #                   from the disk image)
-#   disk/         - the fwup-written disk image (MBR, U-Boot env, A/B kernels,
+#   disk/<id>/    - the fwup-written disk image (MBR, U-Boot env, A/B kernels,
 #                   A/B rootfs, application partition) split into 256 KB
-#                   blocks for lazy loading, plus blk.txt describing them
+#                   blocks for lazy loading, plus blk.txt describing them.
+#                   <id> is a hash of the image, so every image has its own
+#                   URLs and can be cached forever (see "Hosting" in the
+#                   README); disk/ is replaced, older images are removed
+#   nerves.cfg    - drive0 updated to point at disk/<id>/blk.txt
 #
 
 set -e
@@ -55,16 +59,22 @@ fwup -a -d disk.img -i "$FW_FILE" -t complete
 cp "$IMAGES_DIR/fw_jump.bin" opensbi.bin
 cp "$IMAGES_DIR/u-boot.bin" u-boot.bin
 
+# The id identifies this disk image: it names the directory the blocks are
+# served from, and the browser keeps the guest's writes in IndexedDB under
+# it, so a new image starts clean instead of inheriting stale blocks.
+DISK_ID=$(sha256sum disk.img | cut -c1-16)
+DIR="disk/${DISK_ID}"
+
 echo "Splitting the disk image into ${BLOCK_SIZE}KB blocks..."
 BLOCK_BYTES=$((BLOCK_SIZE * 1024))
 FILE_SIZE=$(stat -c%s disk.img)
 N_BLOCKS=$(( (FILE_SIZE + BLOCK_BYTES - 1) / BLOCK_BYTES ))
 
-mkdir -p disk
-split -b "${BLOCK_BYTES}" -d -a 9 --additional-suffix=.bin disk.img disk/blk
+mkdir -p "$DIR"
+split -b "${BLOCK_BYTES}" -d -a 9 --additional-suffix=.bin disk.img "$DIR/blk"
 
 # Pad the last block to full size (TinyEMU requires all blocks to be identical size)
-LAST_BLOCK=$(ls disk/blk*.bin | sort | tail -1)
+LAST_BLOCK=$(ls "$DIR"/blk*.bin | sort | tail -1)
 truncate -s "${BLOCK_BYTES}" "${LAST_BLOCK}"
 
 # Blocks that are entirely zero are not served. blk.txt lists them as
@@ -77,7 +87,7 @@ ZERO_LIST=$(mktemp)
 truncate -s "${BLOCK_BYTES}" "$ZERO_BLOCK"
 N_ZERO=0
 PRESENT=""
-for blk in disk/blk*.bin; do
+for blk in "$DIR"/blk*.bin; do
     n=$(basename "$blk" .bin | sed 's/^blk0*//; s/^$/0/')
     if cmp -s "$blk" "$ZERO_BLOCK"; then
         rm -f "$blk"
@@ -97,14 +107,11 @@ ZERO_RANGES=$(awk '
 rm -f "$ZERO_BLOCK" "$ZERO_LIST"
 
 # Create the block descriptor
-# NOTE: TinyEMU block_size is in KB. The id identifies this disk image:
-# the browser keeps the guest's writes in IndexedDB under it, so a new
-# image starts clean instead of inheriting stale blocks. prefetch lists
-# every block that is served: the emulator downloads them in the
-# background (prefetch_parallel at a time) while the guest boots, so the
-# whole image arrives once and the page can show the download's progress.
-DISK_ID=$(sha256sum disk.img | cut -c1-16)
-cat > disk/blk.txt << EOT
+# NOTE: TinyEMU block_size is in KB. prefetch lists every block that is
+# served: the emulator downloads them in the background (prefetch_parallel
+# at a time) while the guest boots, so the whole image arrives once and the
+# page can show the download's progress.
+cat > "$DIR/blk.txt" << EOT
 {
   block_size: ${BLOCK_SIZE},
   n_block: ${N_BLOCKS},
@@ -117,10 +124,14 @@ EOT
 
 rm -f disk.img
 
+# Point the VM at the new image (the blocks are fetched relative to blk.txt)
+sed -i "s|drive0: { file: \"[^\"]*\" }|drive0: { file: \"${DIR}/blk.txt\" }|" nerves.cfg
+grep -q "\"${DIR}/blk.txt\"" nerves.cfg || { echo "Error: could not update drive0 in nerves.cfg"; exit 1; }
+
 echo "Done!"
 echo "  OpenSBI: opensbi.bin ($(du -h opensbi.bin | cut -f1))"
 echo "  U-Boot:  u-boot.bin ($(du -h u-boot.bin | cut -f1))"
-echo "  Disk:    ${N_BLOCKS} blocks of ${BLOCK_SIZE}KB in disk/, $((N_BLOCKS - N_ZERO)) non-empty ($(du -sh disk | cut -f1))"
+echo "  Disk:    ${N_BLOCKS} blocks of ${BLOCK_SIZE}KB in ${DIR}/, $((N_BLOCKS - N_ZERO)) non-empty ($(du -sh "$DIR" | cut -f1))"
 echo ""
 echo "Serve this directory, e.g.: python3 -m http.server 8000"
 echo "Then open: http://localhost:8000/index.html"
