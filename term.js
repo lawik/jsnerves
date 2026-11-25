@@ -65,11 +65,23 @@ function Term(width, height, handler, tot_height)
         "#55ffff",
         "#ffffff" 
     ];
+    /* xterm's 256 colors: a 6x6x6 color cube, then 24 grays */
+    (function (colors) {
+        var levels = [0, 95, 135, 175, 215, 255], i, hex = function (v) {
+            return (v < 16 ? "0" : "") + v.toString(16);
+        };
+        for (i = 0; i < 216; i++)
+            colors.push("#" + hex(levels[Math.floor(i / 36)]) +
+                        hex(levels[Math.floor(i / 6) % 6]) + hex(levels[i % 6]));
+        for (i = 0; i < 24; i++)
+            colors.push("#" + hex(8 + 10 * i) + hex(8 + 10 * i) + hex(8 + 10 * i));
+    })(this.colors);
     /* attributes bits:
-       0-3: bg
-       4-7: fg
+       0-3: bg (one of the 16 basic colors)
+       4-7: fg, low 4 bits
        8: bold
        9: inverse
+       10-13: fg, high 4 bits (fg is one of the 256 colors)
     */
     this.def_attr = (7 << 4) | 0;
     this.cur_attr = this.def_attr;
@@ -278,7 +290,7 @@ Term.prototype.refresh = function(ymin, ymax)
                         outline += '<span class="term_cursor">';
                     } else {
                         outline += '<span style="';
-                        fg = (attr >> 4) & 0xf;
+                        fg = ((attr >> 4) & 0xf) | (((attr >> 10) & 0xf) << 4);
                         bg = attr & 0xf;
                         bold = (attr >> 8) & 1;
                         inverse = (attr >> 9) & 1;
@@ -506,27 +518,77 @@ Term.prototype.write = function(str)
         update(s.y);
     }
     
+    var FG_MASK = (0xf << 4) | (0xf << 10);
+
+    function set_fg(fg)
+    {
+        s.cur_attr = (s.cur_attr & ~FG_MASK) | ((fg & 0xf) << 4) |
+            ((fg >> 4) << 10);
+    }
+
+    /* the nearest of colors first..last to an RGB value */
+    function nearest_color(r, g, b, last)
+    {
+        var i, c, d, best = 0, best_d = Infinity;
+        for(i = 0; i <= last; i++) {
+            c = parseInt(s.colors[i].slice(1), 16);
+            d = Math.pow(((c >> 16) & 0xff) - r, 2) +
+                Math.pow(((c >> 8) & 0xff) - g, 2) + Math.pow((c & 0xff) - b, 2);
+            if (d < best_d) {
+                best = i;
+                best_d = d;
+            }
+        }
+        return best;
+    }
+
+    /* 38/48 ;5;n (256 colors) or ;2;r;g;b (RGB) at esc_params[j]: returns
+       [color, params used]. The background only has the 16 basic colors. */
+    function extended_color(esc_params, j, last)
+    {
+        var c, n = esc_params[j + 1];
+        if (n == 5 && j + 2 < esc_params.length) {
+            n = esc_params[j + 2] & 0xff;
+            if (n > last) {
+                c = parseInt(s.colors[n].slice(1), 16);
+                n = nearest_color((c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff, last);
+            }
+            return [n, 2];
+        } else if (n == 2 && j + 4 < esc_params.length) {
+            return [nearest_color(esc_params[j + 2], esc_params[j + 3],
+                                  esc_params[j + 4], last), 4];
+        }
+        return [-1, esc_params.length - j];
+    }
+
     function csi_colors(esc_params)
     {
-        var j, n, fg, bg, mask;
+        var j, n, fg, bg, mask, ext;
 
         if (esc_params.length == 0) {
             s.cur_attr= s.def_attr;
         } else {
             for(j = 0; j < esc_params.length; j++) {
                 n = esc_params[j];
-                if (n >= 30 && n <= 37) {
+                if (n == 38 || n == 48) {
+                    ext = extended_color(esc_params, j, n == 38 ? 255 : 15);
+                    if (ext[0] >= 0) {
+                        if (n == 38)
+                            set_fg(ext[0]);
+                        else
+                            s.cur_attr = (s.cur_attr & ~0xf) | ext[0];
+                    }
+                    j += ext[1];
+                } else if (n >= 30 && n <= 37) {
                     /* foreground */
-                    fg = n - 30;
-                    s.cur_attr = (s.cur_attr & ~(0xf << 4)) | (fg << 4);
+                    set_fg(n - 30);
                 } else if (n >= 40 && n <= 47) {
                     /* background */
                     bg = n - 40;
                     s.cur_attr = (s.cur_attr & ~0xf) | bg;
                 } else if (n >= 90 && n <= 97) {
                     /* bright foreground */
-                    fg = n - 90 + 8;
-                    s.cur_attr = (s.cur_attr & ~(0xf << 4)) | (fg << 4);
+                    set_fg(n - 90 + 8);
                 } else if (n >= 100 && n <= 107) {
                     /* bright background */
                     bg = n - 100 + 8;
@@ -545,8 +607,7 @@ Term.prototype.write = function(str)
                     s.cur_attr &= ~(1 << 9);
                 } else if (n == 39) {
                     /* reset fg */
-                    mask = 0x0f << 4;
-                    s.cur_attr = (s.cur_attr & ~mask) | (s.def_attr & mask);
+                    s.cur_attr = (s.cur_attr & ~FG_MASK) | (s.def_attr & FG_MASK);
                 } else if (n == 49) {
                     /* reset bg */
                     mask = 0x0f;
