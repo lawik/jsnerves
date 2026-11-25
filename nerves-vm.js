@@ -17,8 +17,9 @@
  *                               boot progress: loading, opensbi, uboot,
  *                               linux, init, erlang, ready; reset when the
  *                               guest reboots, off when it powers off.
- *                               With a snapshot: loading, restoring, then
- *                               ready with restored: true
+ *                               downloading while the machine waits for the
+ *                               disk image (and snapshot). With a snapshot:
+ *                               ready with restored: true when it runs
  *   snapshot  {phase, url, loaded, total, percent, bytesPerSecond,
  *              secondsLeft, elapsed, message}
  *                               restoring a saved machine instead of
@@ -26,6 +27,11 @@
  *                               no disk changes are saved in this browser):
  *                               phase start, progress, restored, or skipped
  *                               / error (message), after which it boots
+ *   download  {loaded, total, percent, bytesPerSecond, secondsLeft,
+ *              elapsed, done}   everything the machine downloads: the disk
+ *                               image and the snapshot, if one is restored.
+ *                               By default the machine starts when it is
+ *                               done (options.waitForDisk)
  *   progress  {loaded, total, percent, bytesPerSecond, secondsLeft,
  *              blocksLoaded, blocksTotal, elapsed, done}
  *                               download of the disk image: every block
@@ -59,6 +65,7 @@ const STAGES = [
     { stage: "ready", label: "IEx", match: /^iex\(\d+\)> ?$/, prompt: true },
 ];
 const LABELS = { idle: "Not started", loading: "Loading the emulator",
+                 downloading: "Downloading",
                  restoring: "Restoring a snapshot",
                  reset: "Rebooting", off: "Powered off" };
 STAGES.forEach(function(s) { LABELS[s.stage] = s.label; });
@@ -90,11 +97,13 @@ class NervesVM extends EventTarget {
             logLines: 2000,                /* lines kept in vm.log */
             network: null,                 /* see attachNetwork() */
             snapshot: true,                /* restore one if there is one */
+            waitForDisk: true,             /* run once the disk is local */
         }, options || {});
         this.stage = "idle";
         this.slot = null;       /* firmware slot U-Boot booted */
         this.log = [];          /* [{time, text}] */
         this.progress = null;   /* last progress payload */
+        this.download = null;   /* last download payload */
         this.disk = { status: "off", savedBytes: 0, restoredBytes: 0 };
         this._line = "";
         this._stageIndex = -1;
@@ -108,6 +117,9 @@ class NervesVM extends EventTarget {
         this._transcript = "";  /* console output, see transcript */
         this._replaying = false;
         this._snap = null;
+        this._restoredExtra = null;
+        this._waitingDisk = false;
+        this._dl = { samples: [], start: 0, lastEmit: 0, timer: null, finished: false };
     }
 
     /* Load the emulator and boot. Resolves once the machine is running. */
@@ -143,6 +155,9 @@ class NervesVM extends EventTarget {
                 onPowerOff: function(status) { vm._powerOff(status); },
                 snapshot: vm.options.snapshot !== false,
                 onSnapshot: function(info) { vm._snapshot(info); },
+                waitForDisk: vm.options.waitForDisk !== false,
+                onWaiting: function(info) { vm._waiting(info); },
+                onRun: function(info) { vm._run(info); },
                 printErr: function(text) {
                     console.error("[emulator] " + text);
                 },
@@ -337,9 +352,11 @@ class NervesVM extends EventTarget {
 
         switch (info.phase) {
         case "start":
-            this._snap = { start: now, samples: [] };
-            this._setStage("restoring");
+            this._snap = { start: now, samples: [], loaded: 0, total: info.total || 0, done: false };
+            if (!this._waitingDisk)
+                this._setStage("restoring");
             this._emit("snapshot", { phase: "start", url: info.url });
+            this._updateDownload(true);
             return;
         case "progress":
             if (!snap)
@@ -348,6 +365,9 @@ class NervesVM extends EventTarget {
                compressed size, and the browser the decoded bytes */
             if (info.total && info.loaded > info.total)
                 info.total = 0;
+            snap.loaded = info.loaded;
+            snap.total = info.total;
+            this._updateDownload(false);
             snap.samples.push([now, info.loaded]);
             while (snap.samples.length > 2 && now - snap.samples[1][0] >= SPEED_WINDOW_MS)
                 snap.samples.shift();
@@ -370,16 +390,13 @@ class NervesVM extends EventTarget {
             } catch (e) {
                 extra = {};
             }
-            /* show what the console showed when the snapshot was taken */
-            if (extra.slot)
-                this.slot = extra.slot;
-            if (extra.console) {
-                this._replaying = true;
-                try {
-                    this._consoleOutput(extra.console);
-                } finally {
-                    this._replaying = false;
-                }
+            /* shown when the machine runs (_run) */
+            this._restoredExtra = extra;
+            if (snap) {
+                snap.loaded = info.loaded;
+                snap.total = info.total && info.total >= info.loaded ? info.total : info.loaded;
+                snap.done = true;
+                this._updateDownload(true);
             }
             this._emit("snapshot", {
                 phase: "restored", url: info.url,
@@ -389,13 +406,103 @@ class NervesVM extends EventTarget {
                 bytesPerSecond: d > 0 ? info.loaded / d : null,
                 secondsLeft: 0,
             });
-            this._stageIndex = STAGES.length - 1;
-            this._setStage("ready", { restored: true });
             return;
         default: /* skipped, error: the machine boots */
+            this._snap = null;
+            this._updateDownload(true);
             this._emit("snapshot", { phase: info.phase, url: info.url,
                                      message: info.message });
             return;
+        }
+    }
+
+    /* what the machine waits for before it runs */
+    _waiting(info) {
+        this._waitingDisk = info.disk;
+        if (info.disk)
+            this._setStage("downloading");
+    }
+
+    /* the machine starts */
+    _run(info) {
+        const extra = this._restoredExtra;
+        this._waitingDisk = false;
+        if (!info.restored || !extra)
+            return;
+        this._restoredExtra = null;
+        /* show what the console showed when the snapshot was taken */
+        if (extra.slot)
+            this.slot = extra.slot;
+        if (extra.console) {
+            this._replaying = true;
+            try {
+                this._consoleOutput(extra.console);
+            } finally {
+                this._replaying = false;
+            }
+        }
+        this._stageIndex = STAGES.length - 1;
+        this._setStage("ready", { restored: true });
+    }
+
+    /* everything downloaded: the disk image, and the snapshot if one is
+       restored */
+    _updateDownload(force) {
+        const dl = this._dl;
+        const img = this.progress;
+        const snap = this._snap;
+        const now = performance.now();
+        let loaded = 0, total = 0, rate = null, s0, done, p;
+
+        if (dl.finished)
+            return;
+        if (!dl.start)
+            dl.start = now;
+        if (img) {
+            loaded += img.loaded;
+            total += img.total;
+        }
+        if (snap) {
+            loaded += snap.loaded;
+            total += Math.max(snap.total, snap.loaded);
+        }
+        done = !!(img && img.done) && (!snap || snap.done);
+        dl.samples.push([now, loaded]);
+        while (dl.samples.length > 2 && now - dl.samples[1][0] >= SPEED_WINDOW_MS)
+            dl.samples.shift();
+        s0 = dl.samples[0];
+        if (now - s0[0] >= 200)
+            rate = (loaded - s0[1]) * 1000 / (now - s0[0]);
+        p = {
+            loaded: loaded,
+            total: total,
+            percent: total > 0 ? Math.min(100, 100 * loaded / total) : 0,
+            bytesPerSecond: rate,
+            secondsLeft: rate && rate > 0 ? (total - loaded) / rate : null,
+            elapsed: (now - dl.start) / 1000,
+            done: done,
+        };
+        if (done) {
+            dl.finished = true;
+            p.percent = 100;
+            p.secondsLeft = 0;
+            p.bytesPerSecond = loaded * 1000 / Math.max(1, now - dl.start);
+        }
+        this.download = p;
+        if (dl.timer !== null) {
+            clearTimeout(dl.timer);
+            dl.timer = null;
+        }
+        if (force || done || now - dl.lastEmit >= PROGRESS_EVERY_MS) {
+            dl.lastEmit = now;
+            this._emit("download", p);
+        } else {
+            const vm = this;
+            dl.timer = setTimeout(function() {
+                dl.timer = null;
+                dl.lastEmit = performance.now();
+                vm._emit("download", vm.download);
+            }, PROGRESS_EVERY_MS - (now - dl.lastEmit));
         }
     }
 
@@ -504,6 +611,7 @@ class NervesVM extends EventTarget {
             clearTimeout(img.timer);
             img.timer = null;
         }
+        this._updateDownload(force || p.done);
         if (force || p.done || now - img.lastEmit >= PROGRESS_EVERY_MS) {
             img.lastEmit = now;
             this._emit("progress", p);

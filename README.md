@@ -50,7 +50,10 @@ Options: `config` (VM configuration file, default `nerves.cfg`),
 the disk saved in this browser before booting), `logLines` (how many lines
 `vm.log` keeps, default 2000), `network` (an adapter, see `sendPacket` in
 the source), `snapshot` (default `true`: restore the disk image's snapshot
-when there is one; `false` always boots).
+when there is one; `false` always boots), `waitForDisk` (default `true`: the
+machine starts once the whole disk image is downloaded, and the snapshot
+restored, so it never waits for the network; `false` starts it right away
+and loads the image while it runs).
 
 Events (the payload is in `event.detail`):
 
@@ -58,15 +61,16 @@ Events (the payload is in `event.detail`):
 | ----- | ------ | ---- |
 | `console` | `{data, replayed}` | console output as it arrives, escape sequences and all; after a restore, the snapshot's console comes first with `replayed: true` |
 | `line` | `{text, time}` | each complete console line without escape sequences; `time` is ms since `start()`. The last lines are in `vm.log` |
-| `stage` | `{stage, label, previous, time, sinceBoot, slot, restored}` | boot progress: `loading` (the emulator), `opensbi`, `uboot`, `linux`, `init` (erlinit), `erlang`, `ready` (the IEx prompt); `reset` when the guest reboots and `off` when it powers off. `slot` is the firmware slot U-Boot booted. Recognized from the console output. With a snapshot: `loading`, `restoring`, then `ready` with `restored: true` |
+| `stage` | `{stage, label, previous, time, sinceBoot, slot, restored}` | boot progress: `loading` (the emulator), `opensbi`, `uboot`, `linux`, `init` (erlinit), `erlang`, `ready` (the IEx prompt); `reset` when the guest reboots and `off` when it powers off. `slot` is the firmware slot U-Boot booted. Recognized from the console output. `downloading` while the machine waits for the download. With a snapshot, `ready` with `restored: true` once it runs (`restoring` instead of `downloading` with `waitForDisk: false`) |
 | `snapshot` | `{phase, url, loaded, total, percent, bytesPerSecond, secondsLeft, elapsed, message}` | restoring a snapshot: `start`, `progress` (the download, compressed bytes), `restored`; or `skipped`/`error` (`message`), after which the machine boots as usual |
+| `download` | `{loaded, total, percent, bytesPerSecond, secondsLeft, elapsed, done}` | everything downloaded before the machine runs: the disk image, plus the snapshot when one is restored. Same pacing as `progress`. The page's progress bar shows this |
 | `progress` | `{loaded, total, percent, bytesPerSecond, secondsLeft, blocksLoaded, blocksTotal, elapsed, done}` | download of the disk image (every block in `blk.txt` that is not all zeros), at most every 100 ms and once more when done. The speed is over the last 3 seconds |
 | `disk` | `{status, savedBytes, restoredBytes}` | disk persistence: `on`, `off` or `error` |
 | `reset` | `{}` | the guest rebooted the machine |
 | `poweroff` | `{status}` | the guest powered the machine off |
 | `error` | `{message}` | the emulator or a block could not be loaded |
 
-`vm.stage`, `vm.slot`, `vm.progress`, `vm.disk` and `vm.log` hold the
+`vm.stage`, `vm.slot`, `vm.download`, `vm.progress`, `vm.disk` and `vm.log` hold the
 latest values, `vm.transcript` the console output so far. `vm.write(str)`
 types into the console. `vm.saveSnapshot()` resolves to a snapshot of the
 running machine (see Snapshots). `NervesVM.resetDisk()`
@@ -77,7 +81,7 @@ console.
 The emulator side of this is in `../tinyemu/js/lib.js`: every call it makes
 into the page goes through an optional callback on `Module` (`onConsoleOutput`,
 `onFetch`, `onDiskInfo`, `onDiskPersist`, `onReset`, `onPowerOff`,
-`onNetPacket`, `onSnapshot`), which `nerves-vm.js` sets.
+`onNetPacket`, `onSnapshot`, `onWaiting`, `onRun`), which `nerves-vm.js` sets.
 
 ## Networking
 
@@ -133,14 +137,31 @@ new ones.
 
 ## Snapshots
 
-A boot takes 15-20 s of emulated CPU on a fast machine (most of it starting
-the Erlang release), and a first visit also waits for the disk image. A
-snapshot skips that: the machine saved at the IEx prompt, about 63 MB of
-RAM (its pages that are not all zeros), CPU and device state, and the
-disk writes of that boot, gzip-compressed to about 19 MB. A first visit
-downloads it, streams it straight into the emulator's RAM and is at the
-IEx prompt as soon as the download is done; the console shows the boot log
-as it was. The disk image then downloads in the background as usual.
+By default the page downloads first and then runs: the machine starts
+once the whole disk image is in the browser, so it never waits for the
+network afterwards. A boot then takes another 15-20 s of emulated CPU on a
+fast machine (most of it starting the Erlang release). A snapshot skips
+that: the machine saved at the IEx prompt, about 50 MB of RAM (its pages
+that are not all zeros), CPU and device state, and the disk writes of that
+boot, gzip-compressed to 13 MB. It downloads together with the disk image
+and streams straight into the emulator's RAM, and the machine is at the
+IEx prompt as soon as both are in; the console shows the boot log as it
+was.
+
+Time to a working IEx on a first visit (headless Chromium, `tti.mjs` in
+`../jsnerves-checks`):
+
+| Link | Snapshot (39 MB) | Boot (26 MB, then boot) |
+| ---- | ---------------- | ----------------------- |
+| 100 Mbit/s | 3.8 s | 19.5 s |
+| 25 Mbit/s | 13.9 s | 26.7 s |
+| 8 Mbit/s | 42.2 s | 45.0 s |
+| 4 Mbit/s | 84.1 s | 73.8 s |
+
+Below about 8 Mbit/s the snapshot takes longer to download than the boot
+it saves. With `?lazy=1` (`waitForDisk: false`) only the snapshot is
+waited for (1.7 s at 100 Mbit/s, 5.6 s at 25) and the disk image loads
+while the machine runs, which then waits for any block it reads first.
 
 When it is used: `blk.txt` names it (`snapshot: "snapshot-<hash>.gz"`) and no
 disk changes are saved in this browser (they would not match the
@@ -187,7 +208,7 @@ system's `images/` directory.
 
 ## Hosting
 
-Everything is static files (about 26 MB, 45 MB with a snapshot), so any static host works: no
+Everything is static files (about 26 MB, 39 MB with the snapshot), so any static host works: no
 server code, no special headers. Serving `.wasm` as `application/wasm` is
 the only nicety.
 
@@ -208,7 +229,8 @@ Query parameters on `index.html`: `url=` another `.cfg`, `cols=`/`rows=`
 terminal size (default 80x30), `font_size=` (default 17px, shrunk to fit the
 viewport), `mem=` RAM in MB, `reset=1` to discard the persisted disk,
 `debug=1` to log the console lines and boot stages to the browser console,
-`snapshot=0` to boot instead of restoring a snapshot,
+`snapshot=0` to boot instead of restoring a snapshot, `lazy=1` to run the
+machine while the disk image downloads,
 `wisp=`/`ethernet=`/`expose=` for networking (see above).
 
 ## Rebuilding the emulator

@@ -190,6 +190,7 @@ function network(params)
         rows: rows,
         resetDisk: !!(params["reset"] | 0),
         snapshot: params["snapshot"] !== "0",
+        waitForDisk: !(params["lazy"] | 0),
     });
     window.nervesVM = vm; /* for the console and for tests */
 
@@ -207,15 +208,17 @@ function network(params)
         term.write(e.detail.data);
     });
 
-    vm.addEventListener("progress", function(e) {
+    /* everything the machine downloads before it runs: the disk image,
+       and the snapshot if one is restored */
+    vm.addEventListener("download", function(e) {
         var p = e.detail, text;
         bar.style.width = p.percent.toFixed(1) + "%";
         if (p.done) {
-            text = "disk image " + format_bytes(p.total) + " loaded in " +
+            text = "downloaded " + format_bytes(p.total) + " in " +
                 format_seconds(p.elapsed) + " (" +
                 format_bytes(p.bytesPerSecond) + "/s)";
         } else {
-            text = "disk image " + format_bytes(p.loaded) + " of " +
+            text = "downloading " + format_bytes(p.loaded) + " of " +
                 format_bytes(p.total) + " · " + Math.floor(p.percent) + "%";
             if (p.bytesPerSecond !== null)
                 text += " · " + format_bytes(p.bytesPerSecond) + "/s";
@@ -226,31 +229,9 @@ function network(params)
     });
 
     vm.addEventListener("snapshot", function(e) {
-        var p = e.detail, text;
-        switch (p.phase) {
-        case "progress":
-            text = "snapshot " + format_bytes(p.loaded);
-            if (p.total)
-                text += " of " + format_bytes(p.total) + " · " + Math.floor(p.percent) + "%";
-            if (p.bytesPerSecond !== null)
-                text += " · " + format_bytes(p.bytesPerSecond) + "/s";
-            if (p.secondsLeft !== null)
-                text += " · " + format_seconds(p.secondsLeft) + " left";
-            if (p.percent !== null)
-                bar.style.width = p.percent.toFixed(1) + "%";
-            break;
-        case "restored":
-            text = "snapshot " + format_bytes(p.loaded) + " restored in " +
-                format_seconds(p.elapsed);
-            bar.style.width = "100%";
-            break;
-        case "error":
-            text = "could not restore the snapshot (" + p.message + "), booting";
-            break;
-        default:
-            return;
-        }
-        image_label.textContent = text;
+        if (e.detail.phase == "error")
+            stage_el.textContent = "could not restore the snapshot (" +
+                e.detail.message + "), booting instead";
     });
 
     vm.addEventListener("stage", function(e) {
@@ -260,6 +241,9 @@ function network(params)
             text = "IEx is ready, " + format_seconds(s.sinceBoot / 1000) +
                 " after power on" + (s.restored ? ", restored from a snapshot" : "") +
                 (s.slot ? " (slot " + s.slot + ")" : "");
+            break;
+        case "downloading":
+            text = "the machine starts when the download is done";
             break;
         case "restoring":
             text = "restoring a snapshot";
