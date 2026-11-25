@@ -102,9 +102,9 @@ adapter (`network` option; `page.js` does it for `?wisp=` or `?ethernet=`).
 - `ethernet(url)`: raw Ethernet frames over a WebSocket to a relay that
   bridges them to a real network (the JSLinux "wsproxy" protocol).
 
-The firmware has to bring eth0 up: the `networking` branch of
-`../web-demo-nerves` adds vintage_net (DHCP on eth0), nerves_time and
-nerves_ssh. Try it with a local Wisp server:
+The firmware has to bring eth0 up. The default `../web-demo-nerves` firmware
+leaves networking out; its `networking` branch adds vintage_net (DHCP on
+eth0), nerves_time and nerves_ssh. Try it with a local Wisp server:
 
 ```sh
 npm i @mercuryworkshop/wisp-js && npx wisp-js-server --port 6001   # or any Wisp server
@@ -141,9 +141,9 @@ By default the page downloads first and then runs: the machine starts
 once the whole disk image is in the browser, so it never waits for the
 network afterwards. A boot then takes another 15-20 s of emulated CPU on a
 fast machine (most of it starting the Erlang release). A snapshot skips
-that: the machine saved at the IEx prompt, about 50 MB of RAM (its pages
+that: the machine saved at the IEx prompt, about 54 MB of RAM (its pages
 that are not all zeros), CPU and device state, and the disk writes of that
-boot, gzip-compressed to 13 MB. It downloads together with the disk image
+boot, gzip-compressed to 14 MB. It downloads together with the disk image
 and streams straight into the emulator's RAM, and the machine is at the
 IEx prompt as soon as both are in; the console shows the boot log as it
 was.
@@ -151,17 +151,26 @@ was.
 Time to a working IEx on a first visit (headless Chromium, `tti.mjs` in
 `../jsnerves-checks`):
 
-| Link | Snapshot (39 MB) | Boot (26 MB, then boot) |
+| Link | Snapshot (40 MB) | Boot (27 MB, then boot) |
 | ---- | ---------------- | ----------------------- |
-| 100 Mbit/s | 3.8 s | 19.5 s |
-| 25 Mbit/s | 13.9 s | 26.7 s |
-| 8 Mbit/s | 42.2 s | 45.0 s |
-| 4 Mbit/s | 84.1 s | 73.8 s |
+| 100 Mbit/s | 4.0 s | 20.8 s |
+| 25 Mbit/s | 14.3 s | 27.4 s |
+| 8 Mbit/s | 43.4 s | 46.3 s |
+| 4 Mbit/s | 86.3 s | 74.6 s |
 
 Below about 8 Mbit/s the snapshot takes longer to download than the boot
 it saves. With `?lazy=1` (`waitForDisk: false`) only the snapshot is
-waited for (1.7 s at 100 Mbit/s, 5.6 s at 25) and the disk image loads
-while the machine runs, which then waits for any block it reads first.
+waited for and the disk image loads while the machine runs, which then
+waits for any block it reads first.
+
+A boot needs a reasonably fast CPU: nerves_runtime's start-up has
+timeouts (fwup's ops.fw tasks, and the 5 s that callers of
+`Nerves.Runtime.KV` wait while it first loads). The firmware raises the
+fwup one to 4 s, and boots are healthy with the page's CPU throttled 3x
+(`boot-health.mjs` in `../jsnerves-checks`); at 4x, KV's first load takes
+longer than the 5 s `Nerves.Runtime.Init` waits for it and nerves_runtime
+does not start. A snapshot restore does not boot, so it is not affected;
+reboots and visits with saved disk changes are.
 
 When it is used: `blk.txt` names it (`snapshot: "snapshot-<hash>.gz"`) and no
 disk changes are saved in this browser (they would not match the
@@ -208,7 +217,7 @@ system's `images/` directory.
 
 ## Hosting
 
-Everything is static files (about 26 MB, 39 MB with the snapshot), so any static host works: no
+Everything is static files (about 27 MB, 41 MB with the snapshot), so any static host works: no
 server code, no special headers. Serving `.wasm` as `application/wasm` is
 the only nicety.
 

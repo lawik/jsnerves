@@ -7,7 +7,7 @@
 #
 # Example:
 #   ./extract_firmware.sh ../my_app/_build/jslinux_dev/nerves/images/my_app.fw \
-#     ../nerves_system_jslinux/.nerves/artifacts/nerves_system_jslinux-portable-0.4.0/images
+#     ../nerves_system_jslinux/.nerves/artifacts/nerves_system_jslinux-portable-0.4.1/images
 #
 # Produces:
 #   opensbi.bin   - OpenSBI fw_jump (TinyEMU "bios")
