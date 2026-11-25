@@ -13,10 +13,19 @@
  *                               all, for a terminal
  *   line      {text, time}      one console line without escape sequences;
  *                               the last lines are kept in vm.log
- *   stage     {stage, label, previous, time, sinceBoot, slot}
+ *   stage     {stage, label, previous, time, sinceBoot, slot, restored}
  *                               boot progress: loading, opensbi, uboot,
  *                               linux, init, erlang, ready; reset when the
- *                               guest reboots, off when it powers off
+ *                               guest reboots, off when it powers off.
+ *                               With a snapshot: loading, restoring, then
+ *                               ready with restored: true
+ *   snapshot  {phase, url, loaded, total, percent, bytesPerSecond,
+ *              secondsLeft, elapsed, message}
+ *                               restoring a saved machine instead of
+ *                               booting (when the disk image has one and
+ *                               no disk changes are saved in this browser):
+ *                               phase start, progress, restored, or skipped
+ *                               / error (message), after which it boots
  *   progress  {loaded, total, percent, bytesPerSecond, secondsLeft,
  *              blocksLoaded, blocksTotal, elapsed, done}
  *                               download of the disk image: every block
@@ -31,6 +40,9 @@
  *
  * The emulator keeps its state in globals (Module), so there can be one
  * NervesVM per page.
+ *
+ * vm.saveSnapshot() saves the running machine (for a snapshot to serve
+ * next to the disk image; see make_snapshot in the README).
  */
 "use strict";
 
@@ -47,6 +59,7 @@ const STAGES = [
     { stage: "ready", label: "IEx", match: /^iex\(\d+\)> ?$/, prompt: true },
 ];
 const LABELS = { idle: "Not started", loading: "Loading the emulator",
+                 restoring: "Restoring a snapshot",
                  reset: "Rebooting", off: "Powered off" };
 STAGES.forEach(function(s) { LABELS[s.stage] = s.label; });
 
@@ -61,6 +74,7 @@ function plain(str)
 
 const SPEED_WINDOW_MS = 3000;   /* download speed over the last 3 s */
 const PROGRESS_EVERY_MS = 100;  /* at most 10 progress events a second */
+const TRANSCRIPT_MAX = 1 << 20; /* console output kept for a snapshot */
 
 class NervesVM extends EventTarget {
     constructor(options) {
@@ -75,6 +89,7 @@ class NervesVM extends EventTarget {
             resetDisk: false,              /* drop the persisted disk first */
             logLines: 2000,                /* lines kept in vm.log */
             network: null,                 /* see attachNetwork() */
+            snapshot: true,                /* restore one if there is one */
         }, options || {});
         this.stage = "idle";
         this.slot = null;       /* firmware slot U-Boot booted */
@@ -90,6 +105,9 @@ class NervesVM extends EventTarget {
         this._netWrite = null;
         this._netCarrier = null;
         this._network = null;
+        this._transcript = "";  /* console output, see transcript */
+        this._replaying = false;
+        this._snap = null;
     }
 
     /* Load the emulator and boot. Resolves once the machine is running. */
@@ -123,6 +141,8 @@ class NervesVM extends EventTarget {
                 },
                 onReset: function() { vm._reset(); },
                 onPowerOff: function(status) { vm._powerOff(status); },
+                snapshot: vm.options.snapshot !== false,
+                onSnapshot: function(info) { vm._snapshot(info); },
                 printErr: function(text) {
                     console.error("[emulator] " + text);
                 },
@@ -137,12 +157,46 @@ class NervesVM extends EventTarget {
         await ready;
     }
 
+    /* the console output so far (the last MB of it) */
+    get transcript() {
+        return this._transcript;
+    }
+
     /* Type into the console (a string of byte values, as a terminal sends) */
     write(str) {
         if (!this._queueChar)
             return;
         for (let i = 0; i < str.length; i++)
             this._queueChar(str.charCodeAt(i) & 0xff);
+    }
+
+    /* Save the running machine: resolves to the snapshot file
+       (uncompressed; serve it gzip-compressed and name it in blk.txt as
+       "snapshot"). It holds the console output so far (or
+       options.console), which a restore shows again. Waits for the disk
+       to be idle. */
+    async saveSnapshot(options) {
+        const M = global.Module;
+        const opts = options || {};
+        const extra = new TextEncoder().encode(JSON.stringify({
+            version: 1,
+            console: typeof opts.console == "string" ? opts.console : this._transcript,
+            slot: this.slot,
+            saved: new Date().toISOString(),
+        }));
+        for (let attempt = 0; attempt < 50; attempt++) {
+            const result = await new Promise(function(resolve) {
+                M.snapshotExtra = extra;
+                M.onSnapshotSaved = function(bytes, info) {
+                    resolve(bytes ? { bytes: bytes, info: info } : null);
+                };
+                M.ccall("vm_snapshot_save", null, [], []);
+            });
+            if (result)
+                return result.bytes;
+            await new Promise(function(r) { setTimeout(r, 100); });
+        }
+        throw new Error("NervesVM: the machine stayed busy, no snapshot");
     }
 
     /* Throw away the disk writes saved in this browser. Use before start(),
@@ -220,7 +274,10 @@ class NervesVM extends EventTarget {
 
     _consoleOutput(str) {
         let nl, line;
-        this._emit("console", { data: str });
+        this._transcript += str;
+        if (this._transcript.length > TRANSCRIPT_MAX)
+            this._transcript = this._transcript.substring(this._transcript.length - TRANSCRIPT_MAX / 2);
+        this._emit("console", { data: str, replayed: this._replaying });
         this._line += str;
         while ((nl = this._line.indexOf("\n")) >= 0) {
             line = plain(this._line.substring(0, nl));
@@ -245,6 +302,8 @@ class NervesVM extends EventTarget {
     }
 
     _matchStage(text, partial) {
+        if (this._replaying)
+            return;
         for (let i = this._stageIndex + 1; i < STAGES.length; i++) {
             const s = STAGES[i];
             if (partial && !s.prompt)
@@ -268,6 +327,76 @@ class NervesVM extends EventTarget {
     _powerOff(status) {
         this._emit("poweroff", { status: status });
         this._setStage("off");
+    }
+
+    /* snapshot restore (see snapshot_fetch in tinyemu's js/lib.js) */
+    _snapshot(info) {
+        const now = performance.now();
+        const snap = this._snap;
+        let d, extra, rate = null, s0;
+
+        switch (info.phase) {
+        case "start":
+            this._snap = { start: now, samples: [] };
+            this._setStage("restoring");
+            this._emit("snapshot", { phase: "start", url: info.url });
+            return;
+        case "progress":
+            if (!snap)
+                return;
+            /* a server that sends it with Content-Encoding: gzip gives the
+               compressed size, and the browser the decoded bytes */
+            if (info.total && info.loaded > info.total)
+                info.total = 0;
+            snap.samples.push([now, info.loaded]);
+            while (snap.samples.length > 2 && now - snap.samples[1][0] >= SPEED_WINDOW_MS)
+                snap.samples.shift();
+            s0 = snap.samples[0];
+            if (now - s0[0] >= 200)
+                rate = (info.loaded - s0[1]) * 1000 / (now - s0[0]);
+            this._emit("snapshot", {
+                phase: "progress", url: info.url,
+                loaded: info.loaded, total: info.total,
+                percent: info.total ? 100 * info.loaded / info.total : null,
+                bytesPerSecond: rate,
+                secondsLeft: rate && info.total ? (info.total - info.loaded) / rate : null,
+                elapsed: (now - snap.start) / 1000,
+            });
+            return;
+        case "restored":
+            d = (now - (snap ? snap.start : now)) / 1000;
+            try {
+                extra = JSON.parse(new TextDecoder().decode(info.extra));
+            } catch (e) {
+                extra = {};
+            }
+            /* show what the console showed when the snapshot was taken */
+            if (extra.slot)
+                this.slot = extra.slot;
+            if (extra.console) {
+                this._replaying = true;
+                try {
+                    this._consoleOutput(extra.console);
+                } finally {
+                    this._replaying = false;
+                }
+            }
+            this._emit("snapshot", {
+                phase: "restored", url: info.url,
+                loaded: info.loaded,
+                total: info.total && info.total >= info.loaded ? info.total : info.loaded,
+                percent: 100, elapsed: d,
+                bytesPerSecond: d > 0 ? info.loaded / d : null,
+                secondsLeft: 0,
+            });
+            this._stageIndex = STAGES.length - 1;
+            this._setStage("ready", { restored: true });
+            return;
+        default: /* skipped, error: the machine boots */
+            this._emit("snapshot", { phase: info.phase, url: info.url,
+                                     message: info.message });
+            return;
+        }
     }
 
     _diskPersist(info) {

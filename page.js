@@ -189,6 +189,7 @@ function network(params)
         cols: cols,
         rows: rows,
         resetDisk: !!(params["reset"] | 0),
+        snapshot: params["snapshot"] !== "0",
     });
     window.nervesVM = vm; /* for the console and for tests */
 
@@ -224,12 +225,44 @@ function network(params)
         image_label.textContent = text;
     });
 
+    vm.addEventListener("snapshot", function(e) {
+        var p = e.detail, text;
+        switch (p.phase) {
+        case "progress":
+            text = "snapshot " + format_bytes(p.loaded);
+            if (p.total)
+                text += " of " + format_bytes(p.total) + " · " + Math.floor(p.percent) + "%";
+            if (p.bytesPerSecond !== null)
+                text += " · " + format_bytes(p.bytesPerSecond) + "/s";
+            if (p.secondsLeft !== null)
+                text += " · " + format_seconds(p.secondsLeft) + " left";
+            if (p.percent !== null)
+                bar.style.width = p.percent.toFixed(1) + "%";
+            break;
+        case "restored":
+            text = "snapshot " + format_bytes(p.loaded) + " restored in " +
+                format_seconds(p.elapsed);
+            bar.style.width = "100%";
+            break;
+        case "error":
+            text = "could not restore the snapshot (" + p.message + "), booting";
+            break;
+        default:
+            return;
+        }
+        image_label.textContent = text;
+    });
+
     vm.addEventListener("stage", function(e) {
         var s = e.detail, text;
         switch (s.stage) {
         case "ready":
             text = "IEx is ready, " + format_seconds(s.sinceBoot / 1000) +
-                " after power on" + (s.slot ? " (slot " + s.slot + ")" : "");
+                " after power on" + (s.restored ? ", restored from a snapshot" : "") +
+                (s.slot ? " (slot " + s.slot + ")" : "");
+            break;
+        case "restoring":
+            text = "restoring a snapshot";
             break;
         case "reset":
             text = "rebooting";
@@ -290,7 +323,10 @@ function network(params)
         return vm.start();
     }).then(function() {
         /* a ?reset=1 reload would reset the disk again */
-        if ((params["reset"] | 0) && window.history && history.replaceState)
-            history.replaceState(null, "", window.location.pathname);
+        if ((params["reset"] | 0) && window.history && history.replaceState) {
+            var u = new URL(window.location.href);
+            u.searchParams.delete("reset");
+            history.replaceState(null, "", u.pathname + u.search + u.hash);
+        }
     });
 })();

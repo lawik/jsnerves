@@ -18,7 +18,8 @@ Everything here is static files. Serve the directory and open `index.html`.
 | `nerves.cfg` | VM description: 128 MB RAM, `opensbi.bin` as bios, `u-boot.bin` as kernel, `disk/<id>/blk.txt` as the virtio disk |
 | `opensbi.bin` | OpenSBI `fw_jump` from the Nerves system |
 | `u-boot.bin` | U-Boot (S-mode, HTIF console, virtio-blk) from the Nerves system |
-| `disk/<id>/blk*.bin`, `disk/<id>/blk.txt` | the fwup-written disk image in 256 KB blocks, in a directory named after a hash of the image. Blocks that are all zeros are not present: `blk.txt` lists them in `zero` as `[first, count]` ranges so they are never requested (a 404 also reads as zeros). The other blocks are listed in `prefetch`: the emulator downloads them in the background, `prefetch_parallel` (4) at a time, while the guest boots, and fetches any block the guest needs first right away. `blk.txt` also carries an `id` for the persisted writes |
+| `disk/<id>/blk*.bin`, `disk/<id>/blk.txt` | the fwup-written disk image in 256 KB blocks, in a directory named after a hash of the image. Blocks that are all zeros are not present: `blk.txt` lists them in `zero` as `[first, count]` ranges so they are never requested (a 404 also reads as zeros). The other blocks are listed in `prefetch`: the emulator downloads them in the background, `prefetch_parallel` (4) at a time, while the guest boots, and fetches any block the guest needs first right away. `blk.txt` also carries an `id` for the persisted writes, and can name a `snapshot` |
+| `disk/<id>/snapshot-<hash>.gz` | optional: the machine saved at the IEx prompt, restored instead of booting on a first visit (see Snapshots) |
 
 The disk image holds an MBR, the U-Boot environment with the Nerves
 firmware metadata, kernel slots A and B, rootfs partitions A and B and an
@@ -48,15 +49,17 @@ Options: `config` (VM configuration file, default `nerves.cfg`),
 `cols`/`rows` (console size the guest sees), `cmdline`, `resetDisk` (drop
 the disk saved in this browser before booting), `logLines` (how many lines
 `vm.log` keeps, default 2000), `network` (an adapter, see `sendPacket` in
-the source).
+the source), `snapshot` (default `true`: restore the disk image's snapshot
+when there is one; `false` always boots).
 
 Events (the payload is in `event.detail`):
 
 | Event | Detail | When |
 | ----- | ------ | ---- |
-| `console` | `{data}` | console output as it arrives, escape sequences and all |
+| `console` | `{data, replayed}` | console output as it arrives, escape sequences and all; after a restore, the snapshot's console comes first with `replayed: true` |
 | `line` | `{text, time}` | each complete console line without escape sequences; `time` is ms since `start()`. The last lines are in `vm.log` |
-| `stage` | `{stage, label, previous, time, sinceBoot, slot}` | boot progress: `loading` (the emulator), `opensbi`, `uboot`, `linux`, `init` (erlinit), `erlang`, `ready` (the IEx prompt); `reset` when the guest reboots and `off` when it powers off. `slot` is the firmware slot U-Boot booted. Recognized from the console output |
+| `stage` | `{stage, label, previous, time, sinceBoot, slot, restored}` | boot progress: `loading` (the emulator), `opensbi`, `uboot`, `linux`, `init` (erlinit), `erlang`, `ready` (the IEx prompt); `reset` when the guest reboots and `off` when it powers off. `slot` is the firmware slot U-Boot booted. Recognized from the console output. With a snapshot: `loading`, `restoring`, then `ready` with `restored: true` |
+| `snapshot` | `{phase, url, loaded, total, percent, bytesPerSecond, secondsLeft, elapsed, message}` | restoring a snapshot: `start`, `progress` (the download, compressed bytes), `restored`; or `skipped`/`error` (`message`), after which the machine boots as usual |
 | `progress` | `{loaded, total, percent, bytesPerSecond, secondsLeft, blocksLoaded, blocksTotal, elapsed, done}` | download of the disk image (every block in `blk.txt` that is not all zeros), at most every 100 ms and once more when done. The speed is over the last 3 seconds |
 | `disk` | `{status, savedBytes, restoredBytes}` | disk persistence: `on`, `off` or `error` |
 | `reset` | `{}` | the guest rebooted the machine |
@@ -64,7 +67,9 @@ Events (the payload is in `event.detail`):
 | `error` | `{message}` | the emulator or a block could not be loaded |
 
 `vm.stage`, `vm.slot`, `vm.progress`, `vm.disk` and `vm.log` hold the
-latest values. `vm.write(str)` types into the console. `NervesVM.resetDisk()`
+latest values, `vm.transcript` the console output so far. `vm.write(str)`
+types into the console. `vm.saveSnapshot()` resolves to a snapshot of the
+running machine (see Snapshots). `NervesVM.resetDisk()`
 deletes the saved disk. The emulator keeps its state in globals, so a page
 can run one `NervesVM`; `page.js` sets `window.nervesVM` for the browser
 console.
@@ -72,7 +77,7 @@ console.
 The emulator side of this is in `../tinyemu/js/lib.js`: every call it makes
 into the page goes through an optional callback on `Module` (`onConsoleOutput`,
 `onFetch`, `onDiskInfo`, `onDiskPersist`, `onReset`, `onPowerOff`,
-`onNetPacket`), which `nerves-vm.js` sets.
+`onNetPacket`, `onSnapshot`), which `nerves-vm.js` sets.
 
 ## Networking
 
@@ -126,6 +131,34 @@ Saved clusters are keyed by the `id` in `blk.txt`, which
 firmware starts visitors from a clean disk instead of mixing old blocks with
 new ones.
 
+## Snapshots
+
+A boot takes 15-20 s of emulated CPU on a fast machine (most of it starting
+the Erlang release), and a first visit also waits for the disk image. A
+snapshot skips that: the machine saved at the IEx prompt, about 63 MB of
+RAM (its pages that are not all zeros), CPU and device state, and the
+disk writes of that boot, gzip-compressed to about 19 MB. A first visit
+downloads it, streams it straight into the emulator's RAM and is at the
+IEx prompt as soon as the download is done; the console shows the boot log
+as it was. The disk image then downloads in the background as usual.
+
+When it is used: `blk.txt` names it (`snapshot: "snapshot-<hash>.gz"`) and no
+disk changes are saved in this browser (they would not match the
+snapshot's memory). The snapshot's own disk writes are saved with the
+guest's first write; from then on a visit boots normally on the saved disk,
+until "reset disk". A reboot (`Nerves.Runtime.reboot()`) is always a real
+boot. `?snapshot=0` (or `snapshot: false`) boots instead.
+
+A snapshot belongs to one disk image, `nerves.cfg` (RAM size, devices) and
+emulator build: one that does not fit is refused (the machine boots), so
+regenerate it whenever any of them changes. `extract_firmware.sh` writes a
+`blk.txt` without one. To make one, boot the image in a browser, wait for
+the prompt, call `nervesVM.saveSnapshot()`, gzip the result into
+`disk/<id>/snapshot-<hash>.gz` and name it in `blk.txt`;
+`make_snapshot.mjs` in `../jsnerves-checks` does that in headless Chromium
+and checks the result. Every visitor restores the same machine, random
+state included (the kernel reseeds from the virtio-rng over time).
+
 ## Reboot and power off
 
 A reboot from the guest (`Nerves.Runtime.reboot()`, or `reset` in U-Boot)
@@ -154,16 +187,18 @@ system's `images/` directory.
 
 ## Hosting
 
-Everything is static files (about 26 MB), so any static host works: no
+Everything is static files (about 26 MB, 45 MB with a snapshot), so any static host works: no
 server code, no special headers. Serving `.wasm` as `application/wasm` is
 the only nicety.
 
 Each disk image lives in `disk/<id>/`, named after a hash of the image, so a
-new firmware gets new URLs: those files can be cached forever (`Cache-Control:
-public, max-age=31536000, immutable`). `nerves.cfg` says which image to boot,
-so it, `index.html` and the scripts want a short cache time or revalidation.
-Otherwise a visitor's browser or a CDN could mix an old cached `blk.txt` or
-block with the new image. `extract_firmware.sh` removes the older image; a
+new firmware gets new URLs: the blocks and the snapshot (named after its own
+hash) can be cached forever (`Cache-Control: public, max-age=31536000,
+immutable`). `nerves.cfg` says which image to boot and `blk.txt` which
+snapshot to restore, so they, `index.html` and the scripts want a short
+cache time or revalidation. Otherwise a visitor's browser or a CDN could
+mix an old cached file with the new image (a snapshot that does not fit is
+refused, and the machine boots). `extract_firmware.sh` removes the older image; a
 deploy that keeps the previous `disk/<id>/` online for a while also lets
 visitors with a cached `nerves.cfg` still boot it.
 
@@ -173,6 +208,7 @@ Query parameters on `index.html`: `url=` another `.cfg`, `cols=`/`rows=`
 terminal size (default 80x30), `font_size=` (default 17px, shrunk to fit the
 viewport), `mem=` RAM in MB, `reset=1` to discard the persisted disk,
 `debug=1` to log the console lines and boot stages to the browser console,
+`snapshot=0` to boot instead of restoring a snapshot,
 `wisp=`/`ethernet=`/`expose=` for networking (see above).
 
 ## Rebuilding the emulator
