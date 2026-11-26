@@ -49,6 +49,68 @@ function format_bytes(n)
     return Math.round(n / 1024) + " KB";
 }
 
+/* The board under the terminal: its LEDs, buttons (hold to press) and
+   the FPS sensor's reading, from board.js */
+function show_board(board, el)
+{
+    var LED_LABELS = { power: "PWR", ready: "RDY", slotA: "A", slotB: "B" };
+    var leds = {}, fps_el;
+
+    function row(cls) {
+        var r = document.createElement("div");
+        r.className = cls;
+        el.appendChild(r);
+        return r;
+    }
+
+    var led_row = row("board_group");
+    Object.keys(LED_LABELS).forEach(function(led) {
+        var item = document.createElement("span");
+        var dot = document.createElement("span");
+        item.className = "board_led board_led_" + led;
+        dot.className = "board_dot";
+        item.appendChild(dot);
+        item.appendChild(document.createTextNode(LED_LABELS[led]));
+        item.title = led;
+        led_row.appendChild(item);
+        leds[led] = item;
+        item.classList.toggle("on", !!board.leds[led]);
+    });
+    board.addEventListener("led", function(e) {
+        leds[e.detail.led].classList.toggle("on", e.detail.on);
+    });
+
+    var button_row = row("board_group");
+    NervesBoard.BUTTONS.forEach(function(name, i) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "board_button";
+        b.textContent = String(i + 1);
+        b.title = name;
+        function press(down) {
+            return function(e) {
+                e.preventDefault();
+                board.button(name, down);
+            };
+        }
+        b.addEventListener("pointerdown", press(true));
+        b.addEventListener("pointerup", press(false));
+        b.addEventListener("pointerleave", press(false));
+        b.addEventListener("pointercancel", press(false));
+        button_row.appendChild(b);
+    });
+    board.addEventListener("button", function(e) {
+        el.querySelector('[title="' + e.detail.name + '"]')
+            .classList.toggle("down", e.detail.pressed);
+    });
+
+    fps_el = row("board_group board_fps");
+    setInterval(function() {
+        fps_el.textContent = board.fps.value.toFixed(1) + " fps";
+    }, 500);
+    el.hidden = false;
+}
+
 function format_seconds(s)
 {
     if (s < 10)
@@ -193,6 +255,9 @@ function network(params)
         waitForDisk: !(params["lazy"] | 0),
     });
     window.nervesVM = vm; /* for the console and for tests */
+    window.nervesBoard = NervesBoard.attach(vm);
+    if (params["board"] !== "0")
+        show_board(window.nervesBoard, document.getElementById("board"));
 
     term = new Term(cols, rows, function(str) { vm.write(str); }, 10000);
     term.open(document.getElementById("term_container"),

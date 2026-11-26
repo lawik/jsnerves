@@ -42,6 +42,11 @@
  *                               "off" or "error")
  *   reset     {}                the guest rebooted; the machine starts over
  *   poweroff  {status}          the guest powered off; the machine stopped
+ *   power     {on}              the machine has power: on once it runs
+ *                               (a reboot keeps it), off when it powers off
+ *   gpio      {line, name, direction, value, input, on}
+ *                               a GPIO line changed (see "Hardware" below);
+ *                               every line once when the machine is created
  *   error     {message}         something went wrong loading the machine
  *
  * The emulator keeps its state in globals (Module), so there can be one
@@ -49,6 +54,24 @@
  *
  * vm.saveSnapshot() saves the running machine (for a snapshot to serve
  * next to the disk image; see make_snapshot in the README).
+ *
+ * Hardware: the VM config can give the machine a GPIO controller
+ * (gpio0: { lines: [names] }) and an I2C adapter (i2c0: {}), which Linux
+ * sees as /dev/gpiochip0 and /dev/i2c-0. Their other side is the page:
+ *
+ *   vm.gpio                     [{line, name, direction, value, input, on}]
+ *                               direction "none" (not in use), "out" or
+ *                               "in"; value is what the guest drives, input
+ *                               the level the page drives; on: an output
+ *                               driven high (a lit LED)
+ *   vm.setInput(name, level)    drive an input (a button: 1 while pressed)
+ *   vm.press(name, ms)          press and release it; resolves when released
+ *   vm.attachI2C(address, dev)  a device at a 7-bit address: dev.write(bytes)
+ *                               gets each write (a Uint8Array) and
+ *                               dev.read(length) answers each read (bytes);
+ *                               see NervesVM.I2CRegisters. Nothing attached:
+ *                               no acknowledge
+ *   vm.detachI2C(address)
  */
 "use strict";
 
@@ -120,6 +143,12 @@ class NervesVM extends EventTarget {
         this._restoredExtra = null;
         this._waitingDisk = false;
         this._dl = { samples: [], start: 0, lastEmit: 0, timer: null, finished: false };
+        this.gpio = [];
+        this.powered = false;
+        this._inputs = {};      /* name -> level the page drives */
+        this._running = false;  /* the machine runs (inputs reach it) */
+        this._i2c = new Map();  /* address -> device */
+        this._gpioSet = null;
     }
 
     /* Load the emulator and boot. Resolves once the machine is running. */
@@ -158,6 +187,10 @@ class NervesVM extends EventTarget {
                 waitForDisk: vm.options.waitForDisk !== false,
                 onWaiting: function(info) { vm._waiting(info); },
                 onRun: function(info) { vm._run(info); },
+                onGpio: function(info) { vm._gpioChanged(info); },
+                onI2C: function(address, isRead, data) {
+                    return vm._i2cTransfer(address, isRead, data);
+                },
                 printErr: function(text) {
                     console.error("[emulator] " + text);
                 },
@@ -230,6 +263,47 @@ class NervesVM extends EventTarget {
         });
     }
 
+    /* GPIO line by name (see "Hardware" above), or undefined */
+    getLine(name) {
+        return this.gpio.find(function(l) { return l.name === name; });
+    }
+
+    /* Drive an input line from outside: 1 (a pressed button) or 0. Before
+       the machine runs (while it downloads or restores a snapshot) the
+       level waits and is applied when it starts. */
+    setInput(name, level) {
+        level = level ? 1 : 0;
+        this._inputs[name] = level;
+        if (this._running)
+            this._applyInput(name);
+    }
+
+    _applyInput(name) {
+        const l = this.getLine(name);
+        if (l && this._gpioSet && l.input !== this._inputs[name])
+            this._gpioSet(l.line, this._inputs[name]);
+    }
+
+    /* Press a button for ms milliseconds */
+    press(name, ms) {
+        const vm = this;
+        this.setInput(name, 1);
+        return new Promise(function(resolve) {
+            setTimeout(function() {
+                vm.setInput(name, 0);
+                resolve();
+            }, ms === undefined ? 150 : ms);
+        });
+    }
+
+    attachI2C(address, device) {
+        this._i2c.set(address, device);
+    }
+
+    detachI2C(address) {
+        this._i2c.delete(address);
+    }
+
     /* A network adapter (see net/nerves-net.js) is an object with
        receive(frame), which gets every Ethernet frame the guest sends, and
        optionally attach(vm), called once the machine exists. It gives
@@ -263,6 +337,7 @@ class NervesVM extends EventTarget {
         this._queueChar = M.cwrap("console_queue_char", null, ["number"]);
         this._netWrite = M.cwrap("net_write_packet", null, ["array", "number"]);
         this._netCarrier = M.cwrap("net_set_carrier", null, ["number"]);
+        this._gpioSet = M.cwrap("gpio_set_input", null, ["number", "number"]);
         M.ccall("vm_start", null,
                 ["string", "number", "string", "string", "number", "number", "number"],
                 [url, this.options.memory, this.options.cmdline, null, 0, 0, net ? 1 : 0]);
@@ -342,6 +417,44 @@ class NervesVM extends EventTarget {
     _powerOff(status) {
         this._emit("poweroff", { status: status });
         this._setStage("off");
+        this._running = false;
+        this._setPower(false);
+    }
+
+    _setPower(on) {
+        if (this.powered === on)
+            return;
+        this.powered = on;
+        this._emit("power", { on: on });
+    }
+
+    /* a line changed, or is announced (see gpio_line_changed in lib.js) */
+    _gpioChanged(info) {
+        const l = Object.assign({}, info, {
+            on: info.direction === "out" && info.value === 1,
+        });
+        /* no calls into the emulator from here: this runs inside it, during
+           a reset or a snapshot restore */
+        this.gpio[l.line] = l;
+        this._emit("gpio", l);
+    }
+
+    /* one I2C message: true if a device answered (data is filled for a
+       read) */
+    _i2cTransfer(address, isRead, data) {
+        const dev = this._i2c.get(address);
+        let bytes;
+        if (!dev)
+            return false;
+        if (!isRead) {
+            if (dev.write)
+                dev.write(data);
+            return true;
+        }
+        bytes = dev.read ? dev.read(data.length) : null;
+        if (bytes)
+            data.set(Array.from(bytes).slice(0, data.length));
+        return true;
     }
 
     /* snapshot restore (see snapshot_fetch in tinyemu's js/lib.js) */
@@ -427,6 +540,11 @@ class NervesVM extends EventTarget {
     _run(info) {
         const extra = this._restoredExtra;
         this._waitingDisk = false;
+        this._running = true;
+        this._setPower(true);
+        /* the levels the page drives, over what a snapshot restored */
+        for (const name in this._inputs)
+            this._applyInput(name);
         if (!info.restored || !extra)
             return;
         this._restoredExtra = null;
@@ -638,6 +756,54 @@ function loadScript(src)
     });
 }
 
+/* An I2C device with byte registers, as most sensors are: a write sets
+   the register pointer (its first byte) and writes the rest from there, a
+   read reads from the pointer; both move it on. refresh() runs before
+   each read, for live values. */
+class I2CRegisters {
+    constructor(size) {
+        this.registers = new Uint8Array(size || 256);
+        this.pointer = 0;
+    }
+
+    refresh() {
+    }
+
+    /* set registers from reg on: bytes, or a big-endian number of size
+       bytes */
+    set(reg, value, size) {
+        let bytes = value, i;
+        if (typeof value == "number") {
+            bytes = [];
+            for (i = (size || 1) - 1; i >= 0; i--)
+                bytes.push((value / Math.pow(256, i)) & 0xff);
+        }
+        for (i = 0; i < bytes.length; i++)
+            this.registers[(reg + i) % this.registers.length] = bytes[i];
+    }
+
+    write(bytes) {
+        if (bytes.length === 0)
+            return;
+        this.pointer = bytes[0] % this.registers.length;
+        for (let i = 1; i < bytes.length; i++) {
+            this.registers[this.pointer] = bytes[i];
+            this.pointer = (this.pointer + 1) % this.registers.length;
+        }
+    }
+
+    read(length) {
+        const out = new Uint8Array(length);
+        this.refresh();
+        for (let i = 0; i < length; i++) {
+            out[i] = this.registers[this.pointer];
+            this.pointer = (this.pointer + 1) % this.registers.length;
+        }
+        return out;
+    }
+}
+
+NervesVM.I2CRegisters = I2CRegisters;
 NervesVM.STAGES = ["loading"].concat(STAGES.map(function(s) { return s.stage; }));
 NervesVM.plain = plain;
 global.NervesVM = NervesVM;

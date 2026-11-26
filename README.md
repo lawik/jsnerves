@@ -12,10 +12,11 @@ Everything here is static files. Serve the directory and open `index.html`.
 | File | Role |
 | ---- | ---- |
 | `nerves-vm.js` | the JavaScript API: loads the emulator, boots the machine and reports what happens as events (see below) |
-| `index.html`, `style.css`, `term.js`, `page.js` | the page: a terminal and status lines driven by those events |
+| `index.html`, `style.css`, `term.js`, `page.js` | the page: a terminal, the board's LEDs and buttons, and status lines driven by those events |
+| `board.js` | the board around the machine: which GPIO lines are LEDs and buttons, and the FPS sensor on I2C (see Board) |
 | `net/nerves-net.js`, `net/v86/` | network adapters for the guest (see Networking); loaded only when a network is asked for |
 | `riscvemu64-wasm.js`, `riscvemu64-wasm.wasm` | the emulator (built from `../tinyemu`, branch `emscripten-modern`) |
-| `nerves.cfg` | VM description: 128 MB RAM, `opensbi.bin` as bios, `u-boot.bin` as kernel, `disk/<id>/blk.txt` as the virtio disk |
+| `nerves.cfg` | VM description: 128 MB RAM, `opensbi.bin` as bios, `u-boot.bin` as kernel, `disk/<id>/blk.txt` as the virtio disk, the GPIO lines (`gpio0`) and an I2C adapter (`i2c0`) |
 | `opensbi.bin` | OpenSBI `fw_jump` from the Nerves system |
 | `u-boot.bin` | U-Boot (S-mode, HTIF console, virtio-blk) from the Nerves system |
 | `disk/<id>/blk*.bin`, `disk/<id>/blk.txt` | the fwup-written disk image in 256 KB blocks, in a directory named after a hash of the image. Blocks that are all zeros are not present: `blk.txt` lists them in `zero` as `[first, count]` ranges so they are never requested (a 404 also reads as zeros). The other blocks are listed in `prefetch`: the emulator downloads them in the background, `prefetch_parallel` (4) at a time, while the guest boots, and fetches any block the guest needs first right away. `blk.txt` also carries an `id` for the persisted writes, and can name a `snapshot` |
@@ -68,6 +69,8 @@ Events (the payload is in `event.detail`):
 | `disk` | `{status, savedBytes, restoredBytes}` | disk persistence: `on`, `off` or `error` |
 | `reset` | `{}` | the guest rebooted the machine |
 | `poweroff` | `{status}` | the guest powered the machine off |
+| `power` | `{on}` | the machine has power: on once it runs (a reboot keeps it on), off when it powers off. `vm.powered` |
+| `gpio` | `{line, name, direction, value, input, on}` | a GPIO line changed (see Board); each line once when the machine is created, and again after a snapshot restore |
 | `error` | `{message}` | the emulator or a block could not be loaded |
 
 `vm.stage`, `vm.slot`, `vm.download`, `vm.progress`, `vm.disk` and `vm.log` hold the
@@ -81,7 +84,62 @@ console.
 The emulator side of this is in `../tinyemu/js/lib.js`: every call it makes
 into the page goes through an optional callback on `Module` (`onConsoleOutput`,
 `onFetch`, `onDiskInfo`, `onDiskPersist`, `onReset`, `onPowerOff`,
-`onNetPacket`, `onSnapshot`, `onWaiting`, `onRun`), which `nerves-vm.js` sets.
+`onNetPacket`, `onSnapshot`, `onWaiting`, `onRun`, `onGpio`, `onI2C`), which
+`nerves-vm.js` sets.
+
+## Board
+
+`nerves.cfg` gives the machine a virtio GPIO controller and a virtio I2C
+adapter:
+
+```
+gpio0: { lines: ["LED_SLOT_A", "LED_SLOT_B", "LED_READY",
+                 "BUTTON_1", "BUTTON_2", "BUTTON_3"] },
+i2c0: {},
+```
+
+Linux has drivers for both (`/dev/gpiochip0` with those line names, and
+`/dev/i2c-0`), so the firmware uses them with Circuits.GPIO and Circuits.I2C
+as on any board (`WebDemoNerves.Board` in `../web-demo-nerves`). The other
+side of the lines and the bus is the page:
+
+- `vm.gpio` lists the lines: `{line, name, direction, value, input, on}`,
+  where `direction` is `none` (not in use), `out` or `in`, `value` is what
+  the guest drives, `input` the level the page drives and `on` means an
+  output driven high. The `gpio` event reports each change.
+- `vm.setInput(name, level)` drives an input (1 while a button is held),
+  `vm.press(name, ms)` presses and releases it. Edges reach the guest as
+  interrupts.
+- `vm.attachI2C(address, device)` puts a device at a 7-bit address:
+  `device.write(bytes)` gets each write and `device.read(length)` answers
+  each read. An address with nothing attached does not acknowledge.
+  `NervesVM.I2CRegisters` is a register file with a pointer, the usual
+  sensor protocol (write the register number, then read).
+
+`board.js` says what this board's lines and devices are, and is the API to
+use for showing it (the panel under the terminal does, and so can a 3D
+model of the board on another page):
+
+```js
+const board = NervesBoard.attach(vm);       // before or after vm.start()
+board.addEventListener("led", (e) => light(e.detail.led, e.detail.on));
+board.leds;                 // {power, ready, slotA, slotB}: true if lit
+board.button("BUTTON_1", true);             // hold it; false lets go
+await board.press("BUTTON_2");              // press and release
+board.fps.set(59.8);        // the FPS sensor reports this rate
+board.fps.measure();        // back to measuring this page's frame rate
+```
+
+| | What | Driven by |
+| - | ---- | --------- |
+| `power` LED (red) | the machine has power | the page: on while the machine runs |
+| `ready` LED (green), `LED_READY` | the system is up | the firmware: on once its application runs; off when Erlang stops (a reboot, a power off) |
+| `slotA`, `slotB` LEDs, `LED_SLOT_A`, `LED_SLOT_B` | the firmware slot that runs | the firmware, from `nerves_fw_active` |
+| `BUTTON_1` to `BUTTON_3` | buttons, 1 while pressed | the page; the firmware logs presses for now |
+| FPS sensor, I2C `0x10` | frames per second the page renders | the page; register 0 is an ID (`0x46`), registers 1-2 the rate in hundredths, big-endian. `WebDemoNerves.Board.fps()` reads it |
+
+GPIO lines go back to unused (the LEDs off) when the machine resets, and a
+snapshot keeps them, so a restored machine shows its LEDs lit.
 
 ## Networking
 
@@ -239,7 +297,7 @@ terminal size (default 80x30), `font_size=` (default 17px, shrunk to fit the
 viewport), `mem=` RAM in MB, `reset=1` to discard the persisted disk,
 `debug=1` to log the console lines and boot stages to the browser console,
 `snapshot=0` to boot instead of restoring a snapshot, `lazy=1` to run the
-machine while the disk image downloads,
+machine while the disk image downloads, `board=0` to hide the board panel,
 `wisp=`/`ethernet=`/`expose=` for networking (see above).
 
 ## Rebuilding the emulator

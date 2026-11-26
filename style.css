@@ -179,3 +179,73 @@ label {
     bordex: 0px;
 }
 
+
+/* the board (board.js): LEDs, buttons and the FPS sensor */
+.board {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 10px 28px;
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: #6a6a6a;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.board[hidden] {
+    display: none;
+}
+
+.board_group {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.board_led {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.board_dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #222222;
+    box-shadow: inset 0 0 0 1px #333333;
+}
+
+.board_led.on {
+    color: #b0b0b0;
+}
+
+.board_led_power.on .board_dot { background: #ff3b30; box-shadow: 0 0 6px #ff3b30; }
+.board_led_ready.on .board_dot { background: #30d158; box-shadow: 0 0 6px #30d158; }
+.board_led_slotA.on .board_dot,
+.board_led_slotB.on .board_dot { background: #ffb020; box-shadow: 0 0 6px #ffb020; }
+
+.board_button {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 1px solid #333333;
+    background: #111111;
+    color: #8a8a8a;
+    font: inherit;
+    cursor: pointer;
+    touch-action: none;
+}
+
+.board_button.down {
+    background: #2a2a2a;
+    color: #e6e6e6;
+    border-color: #555555;
+}
+
+.board_fps {
+    min-width: 7em;
+}
