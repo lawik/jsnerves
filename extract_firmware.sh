@@ -7,7 +7,7 @@
 #
 # Example:
 #   ./extract_firmware.sh ../my_app/_build/jslinux_dev/nerves/images/my_app.fw \
-#     ~/.nerves/artifacts/nerves_system_jslinux-portable-0.4.2/images
+#     ~/.nerves/artifacts/nerves_system_jslinux-portable-0.4.3/images
 #
 # Needs fwup and GNU coreutils and sed (on a Mac, Homebrew's gnubin
 # directories first on PATH); the snapshot needs Node.js (see

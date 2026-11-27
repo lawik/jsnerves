@@ -284,12 +284,12 @@ Build the firmware in `../web-demo-nerves`, then:
 
 ```sh
 ./extract_firmware.sh ../web-demo-nerves/_build/jslinux_dev/nerves/images/web_demo_nerves.fw \
-  ~/.nerves/artifacts/nerves_system_jslinux-portable-0.4.2/images
+  ~/.nerves/artifacts/nerves_system_jslinux-portable-0.4.3/images
 python3 -m http.server 8000
 ```
 
 The second argument is the Nerves system's `images/` directory: where
-`mix deps.get` puts the prebuilt system (the `v0.4.2` release of
+`mix deps.get` puts the prebuilt system (the `v0.4.3` release of
 underjord/nerves_system_jslinux), or
 `.nerves/artifacts/nerves_system_jslinux-portable-<version>/images` in a
 system checkout built from source. The script uses GNU tools (`split -d`,
