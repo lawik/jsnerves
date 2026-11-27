@@ -268,6 +268,42 @@ npx playwright install-deps chromium` in `tools/`. Options are in
 Every visitor restores the same machine, random state included (the
 kernel reseeds from the virtio-rng over time).
 
+## Firmware updates
+
+The machine has no network by default, so the page hands it updates through
+the disk. `extract_firmware.sh` adds 8 MB of scratch area after the last
+partition (all zeros, so nothing more is downloaded), and:
+
+```js
+const fw = new Uint8Array(await (await fetch("updates/1.2.2-to-1.2.3.fw")).arrayBuffer());
+await board.sendUpdate(fw);                    // into the scratch area
+vm.write("WebDemoNerves.Update.install()\r");  // fwup -t upgrade, then a reboot
+board.addEventListener("firmware", (e) => e.detail);  // {active: "b", a: "1.2.2", b: "1.2.3", valid}
+```
+
+`vm.writeDisk(offset, bytes)` is the emulator's side of it (`disk_write` in
+`../tinyemu/jsemu.c`): a write from the page that is kept like the guest's
+own. `WebDemoNerves.Update.install()` in the firmware reads the file from
+the scratch area and gives it to fwup's `upgrade` task, which writes the
+slot that is not running; the machine reboots into it, and the startup
+guard validates it a few seconds after it is up (`valid` in the `firmware`
+event; fwup refuses to upgrade firmware that is not validated).
+`WebDemoNerves.Update.revert()` goes back to the other slot.
+
+`updates/` holds fwup delta files between the firmware's versions, made with
+[fwup_delta](https://hex.pm/packages/fwup_delta): about 140 KB each for a
+21 MB firmware, since only what differs from the running slot is in them.
+`updates/index.json` lists them and says which version the disk image holds.
+To make them, build each version of `../web-demo-nerves` (its tags `v1.2.2`
+and `v1.2.3`) and run, with the disk image's firmware first:
+
+```sh
+elixir tools/make_deltas.exs web_demo_nerves-1.2.2.fw web_demo_nerves-1.2.3.fw
+```
+
+A delta only applies to the firmware it was made from, so the disk image has
+to be made from that same `.fw` file.
+
 ## Reboot and power off
 
 A reboot from the guest (`Nerves.Runtime.reboot()`, or `reset` in U-Boot)

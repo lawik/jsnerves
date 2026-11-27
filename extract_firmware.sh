@@ -18,7 +18,9 @@
 #   u-boot.bin    - U-Boot, S-mode (TinyEMU "kernel"; it boots the real kernel
 #                   from the disk image)
 #   disk/<id>/    - the fwup-written disk image (MBR, U-Boot env, A/B kernels,
-#                   A/B rootfs, application partition) split into 256 KB
+#                   A/B rootfs, application partition, and 8 MB of scratch
+#                   area after it that the page writes firmware updates
+#                   to, see vm.writeDisk and board.sendUpdate) split into 256 KB
 #                   blocks for lazy loading, plus blk.txt describing them.
 #                   <id> is a hash of the image, so every image has its own
 #                   URLs and can be cached forever (see "Hosting" in the
@@ -33,6 +35,7 @@
 set -e
 
 BLOCK_SIZE=256  # KB
+SCRATCH_MB=8    # after the last partition; WebDemoNerves.Update and board.js agree on it
 
 SNAPSHOT=1
 if [ "$1" = "--no-snapshot" ]; then
@@ -72,6 +75,8 @@ done
 echo "Writing the disk image with fwup..."
 rm -rf disk disk.img
 fwup -a -d disk.img -i "$FW_FILE" -t complete
+# the scratch area: all zeros, so none of its blocks is served
+truncate -s "+${SCRATCH_MB}M" disk.img
 
 cp "$IMAGES_DIR/fw_jump.bin" opensbi.bin
 cp "$IMAGES_DIR/u-boot.bin" u-boot.bin
