@@ -94,6 +94,23 @@ body {
     background: #00ff00;
 }
 
+/* rows as tall as the block elements below, computed the same way, so
+   blocks in neighbouring rows meet without a sliver between them */
+.term_content > div {
+    height: 1.2em;
+}
+
+/* a block element (U+2580-U+259F): one cell, drawn by its background in
+   the text colour (see term_block_css in term.js); the glyph is hidden */
+.term_block {
+    display: inline-block;
+    width: 1ch;
+    height: 1.2em;
+    vertical-align: top;
+    overflow: hidden;
+    -webkit-text-fill-color: transparent;
+}
+
 .term_scrollbar { background: transparent url(images/bg-scrollbar-track-y.png) no-repeat 0 0; position: relative; background-position: 0 0; float: right; width: 15px; height: 100%; }
 .term_track { background: transparent url(images/bg-scrollbar-trackend-y.png) no-repeat 0 100%; height: 100%; width:13px; position: relative; padding: 0 1px; }
 .term_thumb { background: transparent url(images/bg-scrollbar-thumb-y.png) no-repeat 50% 100%; height: 20px; width: 25px; cursor: pointer; overflow: hidden; position: absolute; top: 0; left: -5px; }

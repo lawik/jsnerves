@@ -209,6 +209,46 @@ Term.prototype.refresh_scrollbar = function ()
     }
 }
 
+/* Block elements (U+2580-U+259F) are drawn as boxes filling the whole cell
+   rather than with the font: font glyphs are shorter than the 1.2em rows, so
+   art made of them (the Nerves logo in the MOTD) gets seams and steps that
+   don't meet. Each entry is the CSS background for one character: the
+   filled rectangles, [x, y, w, h] in eighths of the cell. Every rectangle
+   touches the cell's edges, so it is placed at 0% or 100% and sized in
+   percent: the tiles then cover the cell exactly however the browser rounds
+   it to pixels (sizes in ch/em leave hairline seams at fractional font
+   sizes). The shades (U+2591-U+2593) are left to the font. */
+var term_block_css = (function() {
+    var ul = [0, 0, 4, 4], ur = [4, 0, 4, 4], ll = [0, 4, 4, 4], lr = [4, 4, 4, 4];
+    var rects = [], css = [], n;
+    rects[0x00] = [[0, 0, 8, 4]];                           /* upper half */
+    for (n = 1; n <= 8; n++)
+        rects[n] = [[0, 8 - n, 8, n]];                      /* lower n/8 */
+    for (n = 7; n >= 1; n--)
+        rects[0x10 - n] = [[0, 0, n, 8]];                   /* left n/8 */
+    rects[0x10] = [[4, 0, 4, 8]];                           /* right half */
+    rects[0x14] = [[0, 0, 8, 1]];                           /* upper 1/8 */
+    rects[0x15] = [[7, 0, 1, 8]];                           /* right 1/8 */
+    rects[0x16] = [ll];
+    rects[0x17] = [lr];
+    rects[0x18] = [ul];
+    rects[0x19] = [ul, ll, lr];
+    rects[0x1a] = [ul, lr];
+    rects[0x1b] = [ul, ur, ll];
+    rects[0x1c] = [ul, ur, lr];
+    rects[0x1d] = [ur];
+    rects[0x1e] = [ur, ll];
+    rects[0x1f] = [ur, ll, lr];
+    rects.forEach(function(list, i) {
+        css[i] = list.map(function(r) {
+            return "linear-gradient(currentColor,currentColor) " +
+                (r[0] ? "100% " : "0 ") + (r[1] ? "100%/" : "0/") +
+                r[2] * 12.5 + "% " + r[3] * 12.5 + "% no-repeat";
+        }).join(",");
+    });
+    return css;
+})();
+
 Term.prototype.refresh = function(ymin, ymax)
 {
     var el, y, line, outline, c, w, i, j, cx, attr, last_attr, fg, bg, y1;
@@ -333,6 +373,12 @@ Term.prototype.refresh = function(ymin, ymax)
             default:
                 if (c < 32) {
                     outline += "&nbsp;";
+                } else if (c >= 0x2580 && c <= 0x259f &&
+                           term_block_css[c - 0x2580]) {
+                    /* the character stays in for copy and paste, hidden */
+                    outline += '<span class="term_block" style="background:' +
+                        term_block_css[c - 0x2580] + '">' +
+                        String.fromCharCode(c) + '</span>';
                 } else {
                     outline += String.fromCharCode(c);
                 }
