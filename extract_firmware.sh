@@ -7,7 +7,10 @@
 #
 # Example:
 #   ./extract_firmware.sh ../my_app/_build/jslinux_dev/nerves/images/my_app.fw \
-#     ../nerves_system_jslinux/.nerves/artifacts/nerves_system_jslinux-portable-0.4.2/images
+#     ~/.nerves/artifacts/nerves_system_jslinux-portable-0.4.2/images
+#
+# Needs GNU coreutils and sed (on a Mac, Homebrew's gnubin directories
+# first on PATH).
 #
 # Produces:
 #   opensbi.bin   - OpenSBI fw_jump (TinyEMU "bios")
@@ -32,8 +35,10 @@ if [ -z "$1" ] || [ -z "$2" ]; then
     echo "  firmware.fw        Path to the Nerves .fw file"
     echo "  system_images_dir  The Nerves system's images/ directory"
     echo ""
-    echo "The system images directory is typically:"
-    echo "  ../nerves_system_jslinux/.nerves/artifacts/nerves_system_jslinux-portable-*/images"
+    echo "The system images directory is typically (the prebuilt system mix deps.get fetched):"
+    echo "  ~/.nerves/artifacts/nerves_system_jslinux-portable-<version>/images"
+    echo "or, in a system checkout built from source:"
+    echo "  .nerves/artifacts/nerves_system_jslinux-portable-<version>/images"
     exit 1
 fi
 

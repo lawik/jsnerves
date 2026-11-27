@@ -26,7 +26,8 @@ The disk image holds an MBR, the U-Boot environment with the Nerves
 firmware metadata, kernel slots A and B, rootfs partitions A and B and an
 f2fs application partition. U-Boot reads `nerves_fw_active` from the
 environment and boots that slot. See `fwup_include/fwup-common.conf` in
-`../nerves_system_jslinux` for the layout.
+[nerves_system_jslinux](https://github.com/underjord/nerves_system_jslinux)
+for the layout.
 
 ## JavaScript API
 
@@ -263,9 +264,17 @@ Build the firmware in `../web-demo-nerves`, then:
 
 ```sh
 ./extract_firmware.sh ../web-demo-nerves/_build/jslinux_dev/nerves/images/web_demo_nerves.fw \
-  ../nerves_system_jslinux/.nerves/artifacts/nerves_system_jslinux-portable-*/images
+  ~/.nerves/artifacts/nerves_system_jslinux-portable-0.4.2/images
 python3 -m http.server 8000
 ```
+
+The second argument is the Nerves system's `images/` directory: where
+`mix deps.get` puts the prebuilt system (the `v0.4.2` release of
+underjord/nerves_system_jslinux), or
+`.nerves/artifacts/nerves_system_jslinux-portable-<version>/images` in a
+system checkout built from source. The script uses GNU tools (`split -d`,
+`stat -c`, `truncate`, `sed -i`); on a Mac, put Homebrew's coreutils and
+gnu-sed `gnubin` directories first on PATH.
 
 `extract_firmware.sh` writes the disk image with `fwup -a -t complete`, splits
 it into blocks in `disk/<id>/` (replacing `disk/`), drops the empty ones (and
