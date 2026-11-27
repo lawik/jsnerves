@@ -6,6 +6,9 @@ OpenSBI, U-Boot and a Nerves firmware image from an A/B disk layout, exactly
 as a real device would.
 
 Everything here is static files. Serve the directory and open `index.html`.
+`extract_firmware.sh` and `make_snapshot.sh` (with `tools/`) build the disk
+image and its snapshot from a Nerves firmware file (see Updating the
+firmware); they are not part of the site.
 
 ## What is served
 
@@ -240,13 +243,30 @@ boot. `?snapshot=0` (or `snapshot: false`) boots instead.
 
 A snapshot belongs to one disk image, `nerves.cfg` (RAM size, devices) and
 emulator build: one that does not fit is refused (the machine boots), so
-regenerate it whenever any of them changes. `extract_firmware.sh` writes a
-`blk.txt` without one. To make one, boot the image in a browser, wait for
-the prompt, call `nervesVM.saveSnapshot()`, gzip the result into
-`disk/<id>/snapshot-<hash>.gz` and name it in `blk.txt`;
-`make_snapshot.mjs` in `../jsnerves-checks` does that in headless Chromium
-and checks the result. Every visitor restores the same machine, random
-state included (the kernel reseeds from the virtio-rng over time).
+regenerate it whenever any of them changes. `extract_firmware.sh` makes
+one for each new image; after changing `nerves.cfg` or the emulator, run
+
+```sh
+./make_snapshot.sh
+```
+
+It boots the image in headless Chromium, waits for the prompt and
+Nerves.Runtime's startup guard, types a warm-up (loads nerves_runtime's KV
+and the compiler's first modules, then drops the page cache and zeroes the
+free memory so the snapshot compresses well; the prompt stays `iex(1)>`),
+calls `nervesVM.saveSnapshot()`, gzips the result into
+`disk/<id>/snapshot-<hash>.gz` and names it in `blk.txt`. Then it restores
+the snapshot in a fresh browser and checks that IEx answers, nerves_runtime
+runs and the startup guard is done; a boot that fails this (see above) is
+thrown away and the image booted again, up to 5 times. It needs Node.js
+20.11 or later; the first run installs Playwright into `tools/node_modules`
+and its headless Chromium (about 300 MB unpacked) into Playwright's cache.
+On Linux, if that Chromium cannot start for missing libraries, run `sudo
+npx playwright install-deps chromium` in `tools/`. Options are in
+`tools/make_snapshot.mjs`.
+
+Every visitor restores the same machine, random state included (the
+kernel reseeds from the virtio-rng over time).
 
 ## Reboot and power off
 
@@ -280,13 +300,16 @@ gnu-sed `gnubin` directories first on PATH.
 it into blocks in `disk/<id>/` (replacing `disk/`), drops the empty ones (and
 lists them in `blk.txt`), lists the others for prefetching, points `drive0` in
 `nerves.cfg` at the new `blk.txt`, and copies OpenSBI and U-Boot from the
-system's `images/` directory.
+system's `images/` directory. Then it runs `make_snapshot.sh` for the new
+image's snapshot (about a minute; see Snapshots), which needs Node.js.
+`--no-snapshot` (the first argument) skips it, and the page then boots
+the image.
 
 ## Hosting
 
 Everything is static files (about 27 MB, 41 MB with the snapshot), so any static host works: no
 server code, no special headers. Serving `.wasm` as `application/wasm` is
-the only nicety.
+the only nicety. The scripts and `tools/` need not be deployed.
 
 Each disk image lives in `disk/<id>/`, named after a hash of the image, so a
 new firmware gets new URLs: the blocks and the snapshot (named after its own

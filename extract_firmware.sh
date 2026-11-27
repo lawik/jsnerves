@@ -3,14 +3,15 @@
 # Turn a Nerves firmware file into the pieces JSNerves serves to the browser.
 #
 # Usage:
-#   ./extract_firmware.sh <firmware.fw> <system_images_dir>
+#   ./extract_firmware.sh [--no-snapshot] <firmware.fw> <system_images_dir>
 #
 # Example:
 #   ./extract_firmware.sh ../my_app/_build/jslinux_dev/nerves/images/my_app.fw \
 #     ~/.nerves/artifacts/nerves_system_jslinux-portable-0.4.2/images
 #
-# Needs GNU coreutils and sed (on a Mac, Homebrew's gnubin directories
-# first on PATH).
+# Needs fwup and GNU coreutils and sed (on a Mac, Homebrew's gnubin
+# directories first on PATH); the snapshot needs Node.js (see
+# make_snapshot.sh).
 #
 # Produces:
 #   opensbi.bin   - OpenSBI fw_jump (TinyEMU "bios")
@@ -23,17 +24,28 @@
 #                   URLs and can be cached forever (see "Hosting" in the
 #                   README); disk/ is replaced, older images are removed
 #   nerves.cfg    - drive0 updated to point at disk/<id>/blk.txt
+#   disk/<id>/snapshot-<hash>.gz
+#                 - the machine saved at the IEx prompt, restored instead of
+#                   booting (make_snapshot.sh, about a minute; skipped with
+#                   --no-snapshot, and then the page boots the image)
 #
 
 set -e
 
 BLOCK_SIZE=256  # KB
 
+SNAPSHOT=1
+if [ "$1" = "--no-snapshot" ]; then
+    SNAPSHOT=
+    shift
+fi
+
 if [ -z "$1" ] || [ -z "$2" ]; then
-    echo "Usage: $0 <firmware.fw> <system_images_dir>"
+    echo "Usage: $0 [--no-snapshot] <firmware.fw> <system_images_dir>"
     echo ""
     echo "  firmware.fw        Path to the Nerves .fw file"
     echo "  system_images_dir  The Nerves system's images/ directory"
+    echo "  --no-snapshot      Do not make the boot snapshot (make_snapshot.sh)"
     echo ""
     echo "The system images directory is typically (the prebuilt system mix deps.get fetched):"
     echo "  ~/.nerves/artifacts/nerves_system_jslinux-portable-<version>/images"
@@ -138,5 +150,17 @@ echo "  OpenSBI: opensbi.bin ($(du -h opensbi.bin | cut -f1))"
 echo "  U-Boot:  u-boot.bin ($(du -h u-boot.bin | cut -f1))"
 echo "  Disk:    ${N_BLOCKS} blocks of ${BLOCK_SIZE}KB in ${DIR}/, $((N_BLOCKS - N_ZERO)) non-empty ($(du -sh "$DIR" | cut -f1))"
 echo ""
+
+if [ -n "$SNAPSHOT" ]; then
+    echo "Making the boot snapshot (about a minute)..."
+    if ! "$(dirname "$0")/make_snapshot.sh"; then
+        echo ""
+        echo "Error: no snapshot. The disk image is in place and boots without"
+        echo "one; run ./make_snapshot.sh again once the problem above is fixed."
+        exit 1
+    fi
+    echo ""
+fi
+
 echo "Serve this directory, e.g.: python3 -m http.server 8000"
 echo "Then open: http://localhost:8000/index.html"

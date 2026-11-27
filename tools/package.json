@@ -1,0 +1,12 @@
+{
+  "name": "jsnerves-tools",
+  "private": true,
+  "description": "Build tools for jsnerves (make_snapshot.mjs); not served",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "dependencies": {
+    "playwright": "1.65.1"
+  }
+}
